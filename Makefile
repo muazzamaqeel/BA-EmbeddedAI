@@ -26,8 +26,12 @@ TARGET = Project
  # Supported Options: VD66GY; IMX335; VD55G1
 SENSOR_LIST = IMX335 VD66GY VD55G1
 
-MODEL_DIR = Model
-BINARY_DIR = Binary
+ # Supported Options: STM32N6570-DK; NUCLEO-N657X0-Q
+BOARD ?= STM32N6570-DK
+
+define is_nucleo
+$(if $(filter $(BOARD),NUCLEO-N657X0-Q),1,0)
+endef
 
 ######################################
 # building variables
@@ -46,13 +50,16 @@ BUILD_DIR = build
 # C sources
 C_SOURCES += Src/main.c
 C_SOURCES += Src/app.c
-C_SOURCES += Src/app_postprocess.c
 C_SOURCES += Src/app_fuseprogramming.c
 C_SOURCES += Src/stm32_lcd_ex.c
 C_SOURCES += Src/stm32n6xx_it.c
+ifeq ($(call is_nucleo),1)
+C_SOURCES += Model/nucleo/network.c
+else
 C_SOURCES += Model/network.c
+endif
 C_SOURCES += Src/app_cam.c
-C_SOURCES += Src/threadx_hal.c
+C_SOURCES += Src/freertos_bsp.c
 
 # ASM sources
 ASM_SOURCES =
@@ -99,6 +106,12 @@ C_DEFS += -DVECT_TAB_SRAM
 
 C_DEFS += $(foreach SENSOR, $(SENSOR_LIST), -DUSE_$(SENSOR)_SENSOR)
 
+ifeq ($(call is_nucleo),1)
+C_DEFS += -DSTM32N6570_NUCLEO_REV
+else
+C_DEFS += -DSTM32N6570_DK_REV
+endif
+
 # We only support single model
 C_DEFS += -DTX_MAX_PARALLEL_NETWORKS=1
 
@@ -118,7 +131,11 @@ CFLAGS += -std=gnu11
 # LDFLAGS
 #######################################
 # link script
+ifeq ($(call is_nucleo),1)
+LDSCRIPT = Gcc/STM32N657xx_nucleo.ld
+else
 LDSCRIPT = Gcc/STM32N657xx.ld
+endif
 
 # libraries
 LIBS = -lc -lm -lnosys
@@ -139,9 +156,22 @@ all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET
 include mks/fw.mk
 include mks/ai.mk
 include mks/cmw.mk
-include mks/threadx.mk
+include mks/freertos.mk
 include mks/gcc.mk
 include mks/iar.mk
+# force UVCL for nucleo
+ifeq ($(call is_nucleo),1)
+SCR_LIB_SCREEN_ITF ?= UVCL
+#SCR_LIB_SCREEN_ITF ?= SPI
+else
+SCR_LIB_SCREEN_ITF ?= LTDC
+endif
+SCR_USBX_REL_DIR := STM32Cube_FW_N6/Middlewares/ST/usbx
+SCR_LIB_RTOS := FREERTOS
+include Lib/screenl/scr_lib.mk
+ifeq ($(call is_nucleo),0)
+include Lib/tracker/tracker.mk
+endif
 
 #######################################
 # build the application

@@ -86,9 +86,14 @@ You can edit IOU thresholds, anchor values, and other parameters.
 
 Some of these parameters need to be aligned with your model (number of classes, for example).
 
-### Configure Output Buffer Size
+See the post-processing wrapper [README.md](../Lib/ai-postprocessing-wrapper/README.md) for examples of `POSTPROCESS_<*>` values according to the used model.
 
-Edit `NN_BUFFER_OUT_SIZE` so it has the size in bytes of your output tensor.
+### Configure Output Buffer(s) Size
+
+Update `NN_OUT_NB` and the necessary `NN_OUT<x>_SIZE` in [Inc/app_config.h](../Inc/app_config.h) according to the number of output tensors
+and their associated sizes.
+
+You can make usage of [netron](https://netron.app/) to find those values.
 
 ## 4. Build Application
 

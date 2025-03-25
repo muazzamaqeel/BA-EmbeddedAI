@@ -26,20 +26,51 @@
 #define CAMERA_FLIP CMW_MIRRORFLIP_MIRROR
 
 /* Define display size */
+#ifdef STM32N6570_DK_REV
 #define LCD_BG_WIDTH 800
 #define LCD_BG_HEIGHT 480
+#else
+#define LCD_BG_WIDTH 320
+#define LCD_BG_HEIGHT 240
+#endif
 /* Delay display by DISPLAY_DELAY frame number */
 #define DISPLAY_DELAY 1
 
-/* Model Related Info */
-#define POSTPROCESS_TYPE                          POSTPROCESS_OD_YOLO_V2_UF
-#define AI_OBJDETECT_YOLOV2_PP_CONF_THRESHOLD     (0.6f)
-#define AI_OBJDETECT_YOLOV2_PP_IOU_THRESHOLD      (0.3f)
-#define AI_OBJDETECT_YOLOV2_PP_MAX_BOXES_LIMIT    (10)
+#ifdef STM32N6570_DK_REV
+/* Use yolox */
+#define AI_OD_ST_YOLOX_PP_IOU_THRESHOLD             (0.5)
+#define AI_OD_ST_YOLOX_PP_CONF_THRESHOLD            (0.6)
+#define AI_OD_ST_YOLOX_PP_MAX_BOXES_LIMIT           (10)
+#ifndef AI_OD_PP_MAX_BOXES_LIMIT
+#define AI_OD_PP_MAX_BOXES_LIMIT                  (AI_OD_ST_YOLOX_PP_MAX_BOXES_LIMIT)
+#endif
+#else
+/* Use yolov2 */
+#define AI_OD_YOLOV2_PP_CONF_THRESHOLD            (0.6)
+#define AI_OD_YOLOV2_PP_IOU_THRESHOLD             (0.3)
+#define AI_OD_YOLOV2_PP_MAX_BOXES_LIMIT           (10)
+#ifndef AI_OD_PP_MAX_BOXES_LIMIT
+#define AI_OD_PP_MAX_BOXES_LIMIT                  (AI_OD_YOLOV2_PP_MAX_BOXES_LIMIT)
+#endif
+#endif
 
+#ifdef STM32N6570_DK_REV
+#define NN_WIDTH 480
+#define NN_HEIGHT 480
+ /* set number of outputs and define NN_OUTx_SIZE in bytes for x from 0 to (NN_OUT_NB - 1) */
+#define NN_OUT_NB                                 3
+#define NN_OUT0_SIZE                              (15 * 15 * 18 * 4)
+#define NN_OUT1_SIZE                              (60 * 60 * 18 * 4)
+#define NN_OUT2_SIZE                              (30 * 30 * 18 * 4)
+#else
 #define NN_WIDTH 224
 #define NN_HEIGHT 224
-#define NN_BUFFER_OUT_SIZE 5880
+ /* set number of outputs and define NN_OUTx_SIZE in bytes for x from 0 to (NN_OUT_NB - 1) */
+#define NN_OUT_NB                                 1
+#define NN_OUT0_SIZE                              5880
+
+#endif
+
 #define NN_FORMAT DCMIPP_PIXEL_PACKER_FORMAT_RGB888_YUV444_1
 #define NN_BPP 3
 #define NB_CLASSES 2

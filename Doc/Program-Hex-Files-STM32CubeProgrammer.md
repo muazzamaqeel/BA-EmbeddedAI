@@ -9,7 +9,7 @@
 6. Wait for flashing to complete.
 7. From the "Erasing & programming" tab, select the `Binary/network_data.hex` file.
 8. Wait for flashing to complete.
-9. From the "Erasing & programming" tab, select the `Binary/x-cube-n6-ai-people-detection.hex` file.
+9. From the "Erasing & programming" tab, select the `Binary/x-cube-n6-ai-people-detection-tracking.hex` file.
 10. Wait for flashing to complete.
 
 ![Board Selection](../_htmresc/selectBoard.JPG)

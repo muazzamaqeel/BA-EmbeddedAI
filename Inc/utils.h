@@ -20,7 +20,11 @@
 #define UTILS
 
 #define ALIGN_32 __attribute__ ((aligned (32)))
+#ifdef STM32N6570_DK_REV
 #define IN_PSRAM __attribute__ ((section (".psram_bss")))
+#else
+#define IN_PSRAM
+#endif
 #define UNCACHED __attribute__ ((section (".uncached_bss")))
 #define WEAK __weak
 
