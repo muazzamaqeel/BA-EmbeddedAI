@@ -17,7 +17,8 @@
  */
 
 #include "app.h"
-#include "network.h"   // <-- REQUIRED for the macros & default buffers layout
+#include <inttypes.h>
+#include "network.h"
 #include "stm32n6570_discovery_xspi.h"
 #include <math.h>
 #include <stdint.h>
@@ -1286,11 +1287,36 @@ static void xspi_quick_check(void)
     printf("[XSPI] 71027FA0: %08lX %08lX %08lX %08lX\r\n", pC[0], pC[1], pC[2], pC[3]);
 }
 
+#include <stdint.h>
+#include <inttypes.h>
+#include <stdio.h>
+
+
+/* Option A: hardcode once from your .raw size (166225) */
+#ifndef DETECT_WEIGHTS_SIZE
+#define DETECT_WEIGHTS_SIZE (166225u)
+#endif
+
+static inline uint32_t rd32(uintptr_t a){ return *(volatile const uint32_t *)a; }
+
+static void dump_weights_span(void)
+{
+    uintptr_t base = XSPI2_BASE;
+    size_t len = (size_t)DETECT_WEIGHTS_SIZE;
+
+    printf("[DETECT] weights @ [0x%08" PRIxPTR " .. 0x%08" PRIxPTR ")  size=%u bytes\r\n",
+           base, base + len, (unsigned)len);
+
+    /* quick sanity peek */
+    printf("[XSPI] head=%08" PRIx32 " tail=%08" PRIx32 "\r\n",
+           rd32(base), rd32(base + len - 4));
+}
 
 
 void app_run()
 {
 	  int inst = xspi_enable_mmap_auto();
+	  dump_weights_span();
 	  if (inst >= 0) {
 	    xspi_quick_check();  // should match your CubeProgrammer readback
 	  }
