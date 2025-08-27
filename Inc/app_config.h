@@ -27,54 +27,73 @@
 
 /* Define display size */
 #ifdef STM32N6570_DK_REV
-#define LCD_BG_WIDTH 800
-#define LCD_BG_HEIGHT 480
+  #define LCD_BG_WIDTH  800
+  #define LCD_BG_HEIGHT 480
 #else
-#define LCD_BG_WIDTH 320
-#define LCD_BG_HEIGHT 240
+  #define LCD_BG_WIDTH  320
+  #define LCD_BG_HEIGHT 240
 #endif
+
 /* Delay display by DISPLAY_DELAY frame number */
-#define DISPLAY_DELAY 1
+#define DISPLAY_DELAY 0
 
+/* -------------------------------------------------------------------------- */
+/* Object detection thresholds from the original config (not used by BlazeFace) */
 #ifdef STM32N6570_DK_REV
-/* Use yolox */
-#define AI_OD_ST_YOLOX_PP_IOU_THRESHOLD             (0.5)
-#define AI_OD_ST_YOLOX_PP_CONF_THRESHOLD            (0.6)
-#define AI_OD_ST_YOLOX_PP_MAX_BOXES_LIMIT           (10)
-#ifndef AI_OD_PP_MAX_BOXES_LIMIT
-#define AI_OD_PP_MAX_BOXES_LIMIT                  (AI_OD_ST_YOLOX_PP_MAX_BOXES_LIMIT)
-#endif
+  /* Use yolox */
+  #define AI_OD_ST_YOLOX_PP_IOU_THRESHOLD             (0.5f)
+  #define AI_OD_ST_YOLOX_PP_CONF_THRESHOLD            (0.6f)
+  #define AI_OD_ST_YOLOX_PP_MAX_BOXES_LIMIT           (10)
+  #ifndef AI_OD_PP_MAX_BOXES_LIMIT
+    #define AI_OD_PP_MAX_BOXES_LIMIT                  (AI_OD_ST_YOLOX_PP_MAX_BOXES_LIMIT)
+  #endif
 #else
-/* Use yolov2 */
-#define AI_OD_YOLOV2_PP_CONF_THRESHOLD            (0.6)
-#define AI_OD_YOLOV2_PP_IOU_THRESHOLD             (0.3)
-#define AI_OD_YOLOV2_PP_MAX_BOXES_LIMIT           (10)
-#ifndef AI_OD_PP_MAX_BOXES_LIMIT
-#define AI_OD_PP_MAX_BOXES_LIMIT                  (AI_OD_YOLOV2_PP_MAX_BOXES_LIMIT)
+  /* Use yolov2 */
+  #define AI_OD_YOLOV2_PP_CONF_THRESHOLD              (0.6f)
+  #define AI_OD_YOLOV2_PP_IOU_THRESHOLD               (0.3f)
+  #define AI_OD_YOLOV2_PP_MAX_BOXES_LIMIT             (10)
+  #ifndef AI_OD_PP_MAX_BOXES_LIMIT
+    #define AI_OD_PP_MAX_BOXES_LIMIT                  (AI_OD_YOLOV2_PP_MAX_BOXES_LIMIT)
+  #endif
 #endif
-#endif
+/* -------------------------------------------------------------------------- */
 
-#ifdef STM32N6570_DK_REV
-#define NN_WIDTH 480
-#define NN_HEIGHT 480
- /* set number of outputs and define NN_OUTx_SIZE in bytes for x from 0 to (NN_OUT_NB - 1) */
-#define NN_OUT_NB                                 3
-#define NN_OUT0_SIZE                              (15 * 15 * 18 * 4)
-#define NN_OUT1_SIZE                              (60 * 60 * 18 * 4)
-#define NN_OUT2_SIZE                              (30 * 30 * 18 * 4)
-#else
-#define NN_WIDTH 224
-#define NN_HEIGHT 224
- /* set number of outputs and define NN_OUTx_SIZE in bytes for x from 0 to (NN_OUT_NB - 1) */
-#define NN_OUT_NB                                 1
-#define NN_OUT0_SIZE                              5880
-
-#endif
-
+/* Input pixel format from camera to network preproc (RGB888) */
 #define NN_FORMAT DCMIPP_PIXEL_PACKER_FORMAT_RGB888_YUV444_1
-#define NN_BPP 3
-#define NB_CLASSES 2
-#define DECLARE_CLASSES_TABLE const char* classes_table[NB_CLASSES] = {\
-  "person", "not_person"}
+#define NN_BPP    3
 
+/* Classes table (kept for UI elements even though BlazeFace is not class-based) */
+#define NB_CLASSES 2
+#define DECLARE_CLASSES_TABLE \
+  const char* classes_table[NB_CLASSES] = { "person", "not_person" };
+
+/* -------------------------------------------------------------------------- */
+/* Force settings for BlazeFace (4 outputs, 128x128). Keep inside the guard. */
+/* -------------------------------------------------------------------------- */
+#undef  NN_WIDTH
+#undef  NN_HEIGHT
+#undef  NN_OUT_NB
+#ifdef NN_OUT0_SIZE
+  #undef NN_OUT0_SIZE
 #endif
+#ifdef NN_OUT1_SIZE
+  #undef NN_OUT1_SIZE
+#endif
+#ifdef NN_OUT2_SIZE
+  #undef NN_OUT2_SIZE
+#endif
+#ifdef NN_OUT3_SIZE
+  #undef NN_OUT3_SIZE
+#endif
+
+#define NN_WIDTH     128
+#define NN_HEIGHT    128
+#define NN_OUT_NB    4
+
+/* Sizes in BYTES (float32 outputs) as reported by ST Edge AI analyze/generate: */
+#define NN_OUT0_SIZE (512 * 16 * 4)  /* 32768  */
+#define NN_OUT1_SIZE (512 *  1 * 4)  /* 2048   */
+#define NN_OUT2_SIZE (384 *  1 * 4)  /* 1536   */
+#define NN_OUT3_SIZE (384 * 16 * 4)  /* 24576  */
+
+#endif /* APP_CONFIG */

@@ -17,7 +17,9 @@
  */
 
 #include "app.h"
-
+#include "network.h"   // <-- REQUIRED for the macros & default buffers layout
+#include "stm32n6570_discovery_xspi.h"
+#include <math.h>
 #include <stdint.h>
 
 #include "app_cam.h"
@@ -53,7 +55,6 @@
 
 #define ALIGN_VALUE(_v_,_a_) (((_v_) + (_a_) - 1) & ~((_a_) - 1))
 
-#define NN_OUT_MAX_NB 4
 #define NN_OUT_MAX_NB 4
 #if NN_OUT_NB > NN_OUT_MAX_NB
 #error "max output buffer reached"
@@ -203,7 +204,10 @@ static uint8_t screen_buffer[LCD_BG_WIDTH * LCD_BG_HEIGHT * 2] ALIGN_32 IN_PSRAM
 /* model */
 LL_ATON_DECLARE_NAMED_NN_INSTANCE_AND_INTERFACE(Default);
  /* nn input buffers */
+/* Camera NN pipe delivers RGB888: 128*128*3 = 49,152 bytes */
 static uint8_t nn_input_buffers[2][NN_WIDTH * NN_HEIGHT * NN_BPP] ALIGN_32 IN_PSRAM;
+
+
 static bqueue_t nn_input_queue;
  /* nn output buffers */
 static const uint32_t nn_out_len_user[NN_OUT_MAX_NB] = {
@@ -230,6 +234,40 @@ static trk_tbox_t tboxes[2 * AI_OD_PP_MAX_BOXES_LIMIT];
 static trk_dbox_t dboxes[AI_OD_PP_MAX_BOXES_LIMIT];
 static trk_ctx_t trk_ctx;
 #endif
+
+
+static inline void dcache_align_range(void **addr, size_t *len)
+{
+  uintptr_t a = (uintptr_t)(*addr);
+  uintptr_t a0 = a & ~((uintptr_t)31);                 // align down
+  size_t extra = (size_t)(a - a0);
+  size_t l0 = *len + extra;
+  l0 = (l0 + 31U) & ~31U;                              // align up
+  *addr = (void *)a0;
+  *len  = l0;
+}
+
+static inline void DCACHE_Invalidate(void *addr, size_t len)
+{
+#if defined(USE_DCACHE)
+  dcache_align_range(&addr, &len);
+  SCB_InvalidateDCache_by_Addr(addr, len);
+#else
+  (void)addr; (void)len;
+#endif
+}
+
+static inline void DCACHE_Clean(void *addr, size_t len)
+{
+#if defined(USE_DCACHE)
+  dcache_align_range(&addr, &len);
+  SCB_CleanDCache_by_Addr(addr, len);
+#else
+  (void)addr; (void)len;
+#endif
+}
+
+
 
 static int is_cache_enable()
 {
@@ -372,6 +410,7 @@ static void reload_bg_layer(int next_disp_idx)
 
 static void app_main_pipe_frame_event()
 {
+  //printf("P1 frame\n");
   int next_disp_idx = (lcd_bg_buffer_disp_idx + 1) % DISPLAY_BUFFER_NB;
   int next_capt_idx = (lcd_bg_buffer_capt_idx + 1) % DISPLAY_BUFFER_NB;
   int ret;
@@ -387,6 +426,7 @@ static void app_main_pipe_frame_event()
 
 static void app_ancillary_pipe_frame_event()
 {
+  //printf("P2 frame\n");
   uint8_t *next_buffer;
   int ret;
 
@@ -401,6 +441,7 @@ static void app_ancillary_pipe_frame_event()
 
 static void app_main_pipe_vsync_event()
 {
+  //printf("VSYNC\n");
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
   int ret;
 
@@ -632,77 +673,193 @@ static void Display_NetworkOutput(display_info_t *info)
     Display_NetworkOutput_NoTracking(info);
 }
 
+
+
+
+
+
+static const char* aton_io_errstr(int r){
+  if (r == LL_ATON_User_IO_NOERROR)     return "NOERROR";
+  if (r == LL_ATON_User_IO_WRONG_INDEX) return "WRONG_INDEX";
+  if (r == LL_ATON_User_IO_WRONG_SIZE)  return "WRONG_SIZE";
+  return "?";
+}
+
+
+
+
+
+/* ============================== */
+/* nn_thread_fct — INTERNAL-IO    */
+/* - camera RGB/BGR888 -> f32     */
+/* - input stats (throttled)      */
+/* - proper cache maintenance     */
+/* ============================== */
 static void nn_thread_fct(void *arg)
 {
-  const LL_Buffer_InfoTypeDef *nn_out_info = LL_ATON_Output_Buffers_Info_Default();
-  const LL_Buffer_InfoTypeDef *nn_in_info = LL_ATON_Input_Buffers_Info_Default();
-  uint32_t nn_period_ms;
-  uint32_t nn_period[2];
-  uint8_t *nn_pipe_dst;
-  uint32_t nn_in_len;
-  uint32_t inf_ms;
-  uint32_t ts;
-  int ret;
-  int i;
+  /* toggles */
+  #define NN_LOG_INPUT_STATS       1    /* print input float stats ~1Hz */
+  #define NN_ONE_SHOT_SYNTH_TEST   0    /* OFF: don’t overwrite real frames */
 
-  /* setup buffers size */
-  nn_in_len = LL_Buffer_len(&nn_in_info[0]);
-  assert(NN_OUT_NB == model_get_output_nb(nn_out_info));
-  for (i = 0; i < NN_OUT_NB; i++)
-    assert(LL_Buffer_len(&nn_out_info[i]) == nn_out_len_user[i]);
+  /* input/layout */
+  #define INPUT_IS_BGR 0                /* camera pipe outputs RGB888 */
+  #define PACK_AS_NCHW 0                /* BlazeFace is NHWC typically */
 
-  /*** App Loop ***************************************************************/
-  nn_period[1] = HAL_GetTick();
+  /* Get model input buffer (internal, not user-allocated) */
+  const LL_Buffer_InfoTypeDef *nn_in_info  = LL_ATON_Input_Buffers_Info_Default();
+  float    *aton_in     = (float *)LL_Buffer_addr_start(&nn_in_info[0]);   /* FP32 destination */
+  uint32_t  aton_in_len = LL_Buffer_len(&nn_in_info[0]);                   /* bytes, expect 196,608 */
 
-  nn_pipe_dst = bqueue_get_free(&nn_input_queue, 0);
+  const int PIX = (NN_WIDTH * NN_HEIGHT);
+  const int CH  = 3;
+  assert(aton_in != NULL);
+  assert(aton_in_len == (uint32_t)(PIX * CH * sizeof(float)));
+  assert(NN_BPP == 3); /* RGB888/BGR888 */
+
+  /* Start camera capture into our RGB888 byte buffers */
+  uint8_t *nn_pipe_dst = bqueue_get_free(&nn_input_queue, 0);
   assert(nn_pipe_dst);
   CAM_NNPipe_Start(nn_pipe_dst, CMW_MODE_CONTINUOUS);
+
+  uint32_t nn_period[2]; nn_period[1] = HAL_GetTick();
+  uint32_t last_inp_print = 0;
+  int did_synth = 0;
+
+  /* Preprocess: map [0..255] -> [-1..1] */
+  const float scale = 1.0f / 255.0f;
+  const float bias  = 0.0f;
+
   while (1)
   {
-    uint8_t *capture_buffer;
-    uint8_t *out[NN_OUT_NB];
-    uint8_t *output_buffer;
-    int i;
+    /* Wait a captured frame (RGB888 bytes: 128*128*3) */
+    uint8_t *capture_buffer = bqueue_get_ready(&nn_input_queue);
+    assert(capture_buffer);
 
+    /* IMPORTANT: DMA wrote the frame -> invalidate before CPU reads */
+    DCACHE_Invalidate(capture_buffer, NN_WIDTH * NN_HEIGHT * NN_BPP);
+
+    /* Use output queue only as a token to sync with pp thread */
+    (void)bqueue_get_free(&nn_output_queue, 1);
+
+    /* compute NN period */
     nn_period[0] = nn_period[1];
     nn_period[1] = HAL_GetTick();
-    nn_period_ms = nn_period[1] - nn_period[0];
+    uint32_t nn_period_ms = nn_period[1] - nn_period[0];
 
-    capture_buffer = bqueue_get_ready(&nn_input_queue);
-    assert(capture_buffer);
-    output_buffer = bqueue_get_free(&nn_output_queue, 1);
-    assert(output_buffer);
-    out[0] = output_buffer;
-    for (i = 1; i < NN_OUT_NB; i++)
-      out[i] = out[i - 1] + ALIGN_VALUE(nn_out_len_user[i - 1], 32);
+    /* -------- RGB/BGR888 -> float32 -------- */
+    {
+      const uint8_t *src = capture_buffer;
 
-    /* run ATON inference */
-    ts = HAL_GetTick();
-     /* Note that we don't need to clean/invalidate those input buffers since they are only access in hardware */
-    ret = LL_ATON_Set_User_Input_Buffer_Default(0, capture_buffer, nn_in_len);
-    assert(ret == LL_ATON_User_IO_NOERROR);
-     /* Invalidate output buffer before Hw access it */
-    CACHE_OP(SCB_InvalidateDCache_by_Addr(output_buffer, sizeof(nn_output_buffers[0])));
-    for (i = 0; i < NN_OUT_NB; i++) {
-      ret = LL_ATON_Set_User_Output_Buffer_Default(i, out[i], nn_out_len_user[i]);
-      assert(ret == LL_ATON_User_IO_NOERROR);
+#if NN_LOG_INPUT_STATS
+      float mn =  1e30f, mx = -1e30f, sum = 0.f; int cnt = 0;
+#endif
+
+#if PACK_AS_NCHW
+      float *dstR = aton_in + 0 * PIX;
+      float *dstG = aton_in + 1 * PIX;
+      float *dstB = aton_in + 2 * PIX;
+      for (int i = 0; i < PIX; ++i) {
+        float r = (float)(*src++), g = (float)(*src++), b = (float)(*src++);
+#if INPUT_IS_BGR
+        float t = r; r = b; b = t;
+#endif
+        r = r * scale + bias; g = g * scale + bias; b = b * scale + bias;
+        dstR[i] = r; dstG[i] = g; dstB[i] = b;
+#if NN_LOG_INPUT_STATS
+        if ((HAL_GetTick() - last_inp_print) >= 1000U && ((i & 0x3F) == 0)) {
+          if (r < mn) mn = r;
+          if (r > mx) mx = r;
+          sum += r; cnt++;
+          if (g < mn) mn = g;
+          if (g > mx) mx = g;
+          sum += g; cnt++;
+          if (b < mn) mn = b;
+          if (b > mx) mx = b;
+          sum += b; cnt++;
+        }
+
+#endif
+      }
+#else
+      float *dst = aton_in;
+      for (int i = 0; i < PIX; ++i) {
+        float r = (float)(*src++), g = (float)(*src++), b = (float)(*src++);
+#if INPUT_IS_BGR
+        float t = r; r = b; b = t;
+#endif
+        r = r * scale + bias; g = g * scale + bias; b = b * scale + bias;
+        *dst++ = r; *dst++ = g; *dst++ = b;
+#if NN_LOG_INPUT_STATS
+        if ((HAL_GetTick() - last_inp_print) >= 1000U && ((i & 0x3F) == 0)) {
+          if (r < mn) mn = r; if (r > mx) mx = r; sum += r; cnt++;
+          if (g < mn) mn = g; if (g > mx) mx = g; sum += g; cnt++;
+          if (b < mn) mn = b; if (b > mx) mx = b; sum += b; cnt++;
+        }
+#endif
+      }
+#endif /* PACK_AS_NCHW */
+
+#if NN_ONE_SHOT_SYNTH_TEST
+      if (!did_synth) {
+        int n = (int)(aton_in_len / (int)sizeof(float));
+        for (int k = 0; k < n; ++k) aton_in[k] = 0.5f;
+        did_synth = 1;
+        printf("[NN] one-shot synthetic input (all 0.5f) injected\r\n");
+      }
+#endif
+
+      /* cache clean: CPU wrote input, NPU will read it */
+      DCACHE_Clean(aton_in, aton_in_len);
+
+#if NN_LOG_INPUT_STATS
+      if ((HAL_GetTick() - last_inp_print) >= 1000U) {
+        float mean = (cnt > 0) ? (sum / (float)cnt) : 0.f;
+        printf("[NN] input stats: min=%.3f max=%.3f mean=%.3f  [%s, %s]\r\n",
+               mn, mx, mean, INPUT_IS_BGR ? "BGR" : "RGB", PACK_AS_NCHW ? "NCHW" : "NHWC");
+        last_inp_print = HAL_GetTick();
+      }
+#endif
     }
-    LL_ATON_RT_Main(&NN_Instance_Default);
-    inf_ms = HAL_GetTick() - ts;
 
-    /* release buffers */
+    /* -------- Inference -------- */
+    {
+      /* Clean output buffers before NPU writes to them */
+    	/* Prepare outputs for NPU write: invalidate before peripheral writes */
+    	/* Prepare outputs for NPU write: Clean+Invalidate BEFORE run */
+    	const LL_Buffer_InfoTypeDef *nn_out_info = LL_ATON_Output_Buffers_Info_Default();
+    	for (int i = 0; i < NN_OUT_NB; ++i) {
+    	    void *oaddr = LL_Buffer_addr_start(&nn_out_info[i]);
+    	    size_t olen = (size_t)LL_Buffer_len(&nn_out_info[i]);  // was uint32_t
+    	#if defined(USE_DCACHE)
+    	    dcache_align_range(&oaddr, &olen);
+    	    SCB_CleanInvalidateDCache_by_Addr(oaddr, (int)olen);
+    	#endif
+    	}
+
+
+
+    }
+
+    uint32_t ts = HAL_GetTick();
+    LL_ATON_RT_Main(&NN_Instance_Default);
+    uint32_t inf_ms = HAL_GetTick() - ts;
+
+    /* queues */
     bqueue_put_free(&nn_input_queue);
     bqueue_put_ready(&nn_output_queue);
 
-    /* update display stats */
-    ret = xSemaphoreTake(disp.lock, portMAX_DELAY);
-    assert(ret == pdTRUE);
+    /* publish stats to display */
+    int ret = xSemaphoreTake(disp.lock, portMAX_DELAY);  assert(ret == pdTRUE);
     disp.info.inf_ms = inf_ms;
     disp.info.nn_period_ms = nn_period_ms;
-    ret = xSemaphoreGive(disp.lock);
-    assert(ret == pdTRUE);
+    ret = xSemaphoreGive(disp.lock);                     assert(ret == pdTRUE);
   }
 }
+
+
+
+
+
 
 #ifdef TRACKER_MODULE
 static int TRK_Init()
@@ -782,6 +939,16 @@ static int app_tracking(od_pp_out_t *pp)
 }
 #endif
 
+
+
+
+
+
+
+
+
+
+
 static void pp_thread_fct(void *arg)
 {
 #if POSTPROCESS_TYPE == POSTPROCESS_OD_YOLO_V2_UF
@@ -792,40 +959,141 @@ static void pp_thread_fct(void *arg)
   yolov8_pp_static_param_t pp_params;
 #elif POSTPROCESS_TYPE == POSTPROCESS_OD_ST_YOLOX_UF
   st_yolox_pp_static_param_t pp_params;
+#elif POSTPROCESS_TYPE == POSTPROCESS_CUSTOM
+  /* BlazeFace: no static params */
 #else
-    #error "PostProcessing type not supported"
+# error "PostProcessing type not supported"
 #endif
-  uint8_t *pp_input[NN_OUT_NB];
+
+  const LL_Buffer_InfoTypeDef *nn_out_info = LL_ATON_Output_Buffers_Info_Default();
+
+  /* print once */
+  {
+    for (int i = 0; i < NN_OUT_NB; ++i) {
+      const char *nm = nn_out_info[i].name ? nn_out_info[i].name : "(null)";
+      unsigned long blen = (unsigned long)LL_Buffer_len(&nn_out_info[i]);
+      printf("[NN] out[%d] %-24s len=%lu bytes (%lu floats)\r\n",
+             i, nm, blen, blen / (unsigned long)sizeof(float));
+    }
+  }
+
+  void *pp_input[NN_OUT_NB];
+  uint32_t pp_len[NN_OUT_NB];
   od_pp_out_t pp_output;
   int tracking_enabled;
   uint32_t nn_pp[2];
-  int ret;
-  int i;
+  int ret, i;
 
-  (void)tracking_enabled;
-  /* setup post process */
+  /* init postprocess */
+#if POSTPROCESS_TYPE == POSTPROCESS_CUSTOM
+  app_postprocess_init(NULL);
+#else
   app_postprocess_init(&pp_params);
+#endif
+
+  const uint32_t PRINT_BLOB_EVERY_MS   = 500;  /* throttle heavy logs */
+  const uint32_t PRINT_RESULT_EVERY_MS = 250;
+  uint32_t last_blob_print   = 0;
+  uint32_t last_result_print = 0;
+
   while (1)
   {
-    uint8_t *output_buffer;
+    /* wait “inference-done” token from nn thread */
+    (void)bqueue_get_ready(&nn_output_queue);
 
-    output_buffer = bqueue_get_ready(&nn_output_queue);
-    assert(output_buffer);
-    pp_input[0] = output_buffer;
-    for (i = 1; i < NN_OUT_NB; i++)
-      pp_input[i] = pp_input[i - 1] + ALIGN_VALUE(nn_out_len_user[i - 1], 32);
-    pp_output.pOutBuff = NULL;
+    /* grab internal output pointers/sizes */
+    for (i = 0; i < NN_OUT_NB; i++) {
+      pp_input[i] = LL_Buffer_addr_start(&nn_out_info[i]);
+      pp_len[i]   = LL_Buffer_len(&nn_out_info[i]);
+      /* cache invalidate: NPU wrote, CPU will read */
+      DCACHE_Invalidate(pp_input[i], pp_len[i]);
+    }
+
+    /* ---------- BlazeFace: convert logits -> probabilities (sigmoid) ---------- */
+    int idx512 = -1, idx384 = -1;  /* large/small score heads */
+    for (int j = 0; j < NN_OUT_NB; ++j) {
+      int nf = (int)(pp_len[j] / (uint32_t)sizeof(float));
+      if (nf == 512) idx512 = j;
+      if (nf == 384) idx384 = j;
+    }
+    if (idx512 >= 0) {
+      float *p = (float*)pp_input[idx512];
+      for (int k = 0; k < 512; ++k) { float v = p[k]; p[k] = 1.f / (1.f + expf(-v)); }
+    }
+    if (idx384 >= 0) {
+      float *p = (float*)pp_input[idx384];
+      for (int k = 0; k < 384; ++k) { float v = p[k]; p[k] = 1.f / (1.f + expf(-v)); }
+    }
+    /* ------------------------------------------------------------------------- */
+
+    /* blob quick stats (throttled) — now scores are in [0..1] */
+    {
+      uint32_t now = HAL_GetTick();
+      if ((now - last_blob_print) >= PRINT_BLOB_EVERY_MS) {
+        for (int j = 0; j < NN_OUT_NB; ++j) {
+          int nf = (int)(pp_len[j] / (int)sizeof(float));
+          const float *p = (const float*)pp_input[j];
+          float maxv = -1e30f, minv = 1e30f, sum = 0.f; int cnt = 0, nz = 0, nan_cnt = 0;
+          for (int k = 0; k < nf; k++) {
+            float v = p[k];
+            if (v != v) { nan_cnt++; continue; } /* NaN */
+            if (v > maxv) maxv = v;
+            if (v < minv) minv = v;
+            sum += v; cnt++;
+            if (v != 0.f) nz++;
+          }
+          float mean = cnt ? (sum / (float)cnt) : 0.f;
+          printf("[NN] out%d nf=%d  min=% .5f  max=% .5f  mean=% .5f  nz=%d  nan=%d\r\n",
+                 j, nf, minv, maxv, mean, nz, nan_cnt);
+        }
+
+        if (idx512 >= 0 && idx384 >= 0) {
+          const float *scrL = (const float*)pp_input[idx512];
+          const float *scrS = (const float*)pp_input[idx384];
+          float maxL = -1e30f, sumL = 0.f; int cntL = 0;
+          for (int k = 0; k < 512; ++k) { float v = scrL[k]; if (v==v) { if (v > maxL) maxL = v; sumL += v; cntL++; } }
+          float avgL = cntL ? (sumL / (float)cntL) : 0.f;
+          float maxS = -1e30f, sumS = 0.f; int cntS = 0;
+          for (int k = 0; k < 384; ++k) { float v = scrS[k]; if (v==v) { if (v > maxS) maxS = v; sumS += v; cntS++; } }
+          float avgS = cntS ? (sumS / (float)cntS) : 0.f;
+          printf("[NN] scores  L:max=%.3f avg=%.3f  S:max=%.3f avg=%.3f  (o%d,o%d)\r\n",
+                 maxL, avgL, maxS, avgS, idx512, idx384);
+        }
+        last_blob_print = now;
+      }
+    }
+
+    /* run postprocess */
+    pp_output.pOutBuff  = NULL;
+    pp_output.nb_detect = 0;
 
     nn_pp[0] = HAL_GetTick();
+#if POSTPROCESS_TYPE == POSTPROCESS_CUSTOM
+    ret = app_postprocess_run((void **)pp_input, NN_OUT_NB, &pp_output, NULL);
+#else
     ret = app_postprocess_run((void **)pp_input, NN_OUT_NB, &pp_output, &pp_params);
+#endif
     assert(ret == 0);
     tracking_enabled = app_tracking(&pp_output);
-
     nn_pp[1] = HAL_GetTick();
 
-    /* update display stats and detection info */
-    ret = xSemaphoreTake(disp.lock, portMAX_DELAY);
-    assert(ret == pdTRUE);
+    /* pretty result line (throttled) */
+    {
+      uint32_t now = HAL_GetTick();
+      if ((now - last_result_print) >= PRINT_RESULT_EVERY_MS) {
+        if (pp_output.nb_detect > 0) {
+          const od_pp_outBuffer_t *d = &pp_output.pOutBuff[0];
+          printf("[PP] Face Found  n=%d  (cx=%.2f cy=%.2f w=%.2f h=%.2f conf=%.2f)\r\n",
+                 (int)pp_output.nb_detect, d->x_center, d->y_center, d->width, d->height, d->conf);
+        } else {
+          printf("[PP] Face NOT Found\r\n");
+        }
+        last_result_print = now;
+      }
+    }
+
+    /* update display */
+    ret = xSemaphoreTake(disp.lock, portMAX_DELAY);  assert(ret == pdTRUE);
     disp.info.nb_detect = pp_output.nb_detect;
     for (i = 0; i < pp_output.nb_detect; i++)
       disp.info.detects[i] = pp_output.pOutBuff[i];
@@ -833,21 +1101,30 @@ static void pp_thread_fct(void *arg)
     disp.info.tracking_enabled = tracking_enabled;
     disp.info.tboxes_valid_nb = 0;
     for (i = 0; i < ARRAY_NB(tboxes); i++) {
-      if (!tboxes[i].is_tracking || tboxes[i].tlost_cnt)
-        continue;
+      if (!tboxes[i].is_tracking || tboxes[i].tlost_cnt) continue;
       tbox_to_tbox_info(&tboxes[i], &disp.info.tboxes[disp.info.tboxes_valid_nb]);
       disp.info.tboxes_valid_nb++;
     }
 #endif
     disp.info.pp_ms = nn_pp[1] - nn_pp[0];
-    ret = xSemaphoreGive(disp.lock);
-    assert(ret == pdTRUE);
+    ret = xSemaphoreGive(disp.lock);                 assert(ret == pdTRUE);
 
+    /* hand token back + wake display */
     bqueue_put_free(&nn_output_queue);
-    /* It's possible xqueue is empty if display is slow. So don't check error code that may by pdFALSE in that case */
     xSemaphoreGive(disp.update);
   }
 }
+
+
+
+
+
+
+
+
+
+
+
 
 static void dp_update_drawing_area()
 {
@@ -892,7 +1169,7 @@ static void dp_thread_fct(void *arg)
     ts = HAL_GetTick();
     dp_update_drawing_area();
     Display_NetworkOutput(&info);
-    SCB_CleanDCache_by_Addr(lcd_fg_buffer[lcd_fg_buffer_rd_idx], LCD_FG_WIDTH * LCD_FG_HEIGHT* 2);
+    DCACHE_Clean(lcd_fg_buffer[lcd_fg_buffer_rd_idx], LCD_FG_WIDTH * LCD_FG_HEIGHT * 2);
     dp_commit_drawing_area();
     disp_ms = HAL_GetTick() - ts;
   }
@@ -947,8 +1224,77 @@ static void Display_init()
   UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
 }
 
+
+static void xspi_enable_mmap(void)
+{
+    BSP_XSPI_NOR_Init_t cfg = {0};
+#ifdef BSP_XSPI_NOR_OPI_MODE
+    cfg.InterfaceMode = BSP_XSPI_NOR_OPI_MODE;
+#endif
+#ifdef BSP_XSPI_NOR_DTR_TRANSFER
+    cfg.TransferRate  = BSP_XSPI_NOR_DTR_TRANSFER;
+#endif
+#ifdef BSP_XSPI_NOR_DUALFLASH_DISABLE
+    cfg.DualFlash     = BSP_XSPI_NOR_DUALFLASH_DISABLE;
+#endif
+
+    int32_t st = BSP_XSPI_NOR_Init(1, &cfg);
+    if (st != BSP_ERROR_NONE) { printf("XSPI1 init failed: %ld\r\n", (long)st); return; }
+    st = BSP_XSPI_NOR_EnableMemoryMappedMode(1);
+    if (st != BSP_ERROR_NONE) { printf("XSPI1 mmap failed: %ld\r\n", (long)st); return; }
+}
+
+
+static int xspi_enable_mmap_auto(void)
+{
+    BSP_XSPI_NOR_Init_t cfg = {0};
+#ifdef BSP_XSPI_NOR_OPI_MODE
+    cfg.InterfaceMode = BSP_XSPI_NOR_OPI_MODE;
+#endif
+#ifdef BSP_XSPI_NOR_DTR_TRANSFER
+    cfg.TransferRate  = BSP_XSPI_NOR_DTR_TRANSFER;
+#endif
+#ifdef BSP_XSPI_NOR_DUALFLASH_DISABLE
+    cfg.DualFlash     = BSP_XSPI_NOR_DUALFLASH_DISABLE;
+#endif
+
+    const int candidates[2] = {1, 0};  /* N6570-DK NOR is typically XSPI2 (index 1), fallback XSPI1 (0) */
+    for (int t = 0; t < 2; ++t) {
+        int inst = candidates[t];
+        if (BSP_XSPI_NOR_Init(inst, &cfg) == BSP_ERROR_NONE) {
+            if (BSP_XSPI_NOR_EnableMemoryMappedMode(inst) == BSP_ERROR_NONE) {
+                printf("XSPI%d mapped OK (NOR @ 0x71000000)\r\n", inst + 1);
+                return inst;
+            } else {
+                printf("XSPI%d mmap enable failed\r\n", inst + 1);
+            }
+        }
+    }
+    printf("XSPI mmap failed on both instances\r\n");
+    return -1;
+}
+
+
+static void xspi_quick_check(void)
+{
+    volatile const uint32_t *pA = (const uint32_t*)0x71000000u;  // base
+    volatile const uint32_t *pB = (const uint32_t*)0x71028590u;  // A_vector (scale) from network.c
+    volatile const uint32_t *pC = (const uint32_t*)0x71027FA0u;  // C_vector (bias)  from network.c
+
+    printf("[XSPI] 71000000: %08lX %08lX %08lX %08lX\r\n", pA[0], pA[1], pA[2], pA[3]);
+    printf("[XSPI] 71028590: %08lX %08lX %08lX %08lX\r\n", pB[0], pB[1], pB[2], pB[3]);
+    printf("[XSPI] 71027FA0: %08lX %08lX %08lX %08lX\r\n", pC[0], pC[1], pC[2], pC[3]);
+}
+
+
+
 void app_run()
 {
+	  int inst = xspi_enable_mmap_auto();
+	  if (inst >= 0) {
+	    xspi_quick_check();  // should match your CubeProgrammer readback
+	  }
+
   UBaseType_t isp_priority = FREERTOS_PRIORITY(2);
   UBaseType_t pp_priority = FREERTOS_PRIORITY(-2);
   UBaseType_t dp_priority = FREERTOS_PRIORITY(-2);

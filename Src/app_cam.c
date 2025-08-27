@@ -73,7 +73,7 @@ static void DCMIPP_PipeInitNn(int sensor_width, int sensor_height)
   dcmipp_conf.output_format = NN_FORMAT;
   dcmipp_conf.output_bpp = NN_BPP;
   dcmipp_conf.mode = CMW_Aspect_ratio_manual_roi;
-  dcmipp_conf.enable_swap = 1;
+  dcmipp_conf.enable_swap = 0;
   dcmipp_conf.enable_gamma_conversion = 0;
   CAM_InitCropConfig(&dcmipp_conf.manual_conf, sensor_width, sensor_height);
   ret = CMW_CAMERA_SetPipeConfig(DCMIPP_PIPE2, &dcmipp_conf, &hw_pitch);
