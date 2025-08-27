@@ -1,0 +1,4455 @@
+/**
+  ******************************************************************************
+  * @file    network.c
+  * @author  AST Embedded Analytics Research Platform
+  * @date    2025-08-27T19:19:17+0200
+  * @brief   AI Tool Automatic Code Generator for Embedded NN computing
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  ******************************************************************************
+  */
+
+#include "ai_lite_inspect.h"
+#include "ai_platform_interface.h"
+#include "layers.h"
+#include "core_convert.h"
+#include "network.h"
+#include "network_details.h"
+#include "stai_events.h"
+
+#include "ai_lite_inspect.h"
+
+#include "lite_operators.h"
+/*****************************************************************************/
+#define STAI_INTERNAL_API_MAJOR               (1)
+#define STAI_INTERNAL_API_MINOR               (0)
+#define STAI_INTERNAL_API_MICRO               (0)
+
+#define STAI_MAGIC                            (0xB1C00100)
+
+/*****************************************************************************/
+#define _STAI_CONCAT_ARG(a, b)     a ## b
+#define STAI_CONCAT(a, b)         _STAI_CONCAT_ARG(a, b)
+
+/*!  STAI_CAST SECTION                       *********************************/
+#define STAI_CAST(type, expr) \
+  ((type)(expr))
+
+
+/*****************************************************************************/
+#define STAI_SIZE(_size) \
+  ((stai_size)(_size))
+
+/*****************************************************************************/
+#define STAI_INIT_BUFFER(_flags, _size, _address) \
+  { \
+    .size = (_size), \
+    .address = (uintptr_t)(_address), \
+    .flags = (_flags), \
+  }
+
+#define STAI_INIT_TENSOR(_name, _flags, _fmt, _size_bytes, _shape, _scale, _zeropoint) \
+  { \
+    .size_bytes = (_size_bytes), \
+    .flags = (_flags), \
+    .format = (stai_format)(_fmt), \
+    .shape = STAI_PACK(_shape), \
+    .scale = STAI_PACK(_scale), \
+    .zeropoint = STAI_PACK(_zeropoint), \
+    .name = (_name) \
+  }
+
+#define STAI_INIT_ARRAY(_size, _ptr) \
+  { .size = STAI_SIZE(_size), .data = STAI_PACK(_ptr) }
+
+
+#define STAI_CAST_ARRAY(_type, _size, _ptr) \
+  { .size = STAI_SIZE(_size), .data = (_type)STAI_PACK(_ptr) }
+
+
+#define STAI_DECLARE_ARRAY(_type, _size, ...) \
+  { .size = STAI_SIZE(_size), .data = (_type[_size]) { STAI_PACK(__VA_ARGS__) } }
+
+
+#define STAI_EMPTY_ARRAY() \
+  { .size = 0, .data = NULL }
+
+
+#define STAI_INIT_VERSION(_major, _minor, _micro) \
+  { .major = (_major), .minor = (_minor), .micro = (_micro), .reserved = 0x0 }
+
+/*****************************************************************************/
+/**  Getters and setters  **/
+
+#define STAI_GET_ARRAY_SIZE(nd_array) \
+  (nd_array.size)
+
+
+#define STAI_GET_ARRAY_ELEM(nd_array, pos) \
+  (nd_array.data[(pos)])
+
+#define _STAI_SET_ERROR(net_ctx, cond, value, exit) { \
+  if (!(net_ctx)) { return STAI_ERROR_NETWORK_INVALID_CONTEXT_HANDLE; } \
+  if (((uintptr_t)net_ctx) & (_STAI_CONTEXT_ALIGNMENT-1)) { return STAI_ERROR_NETWORK_INVALID_CONTEXT_ALIGNMENT; } \
+  if (((value) >= STAI_ERROR_GENERIC) && (cond)) { \
+    if ((net_ctx)->_return_code == STAI_SUCCESS) { \
+      (net_ctx)->_return_code = (value); \
+    } \
+    return (exit); \
+  } \
+}
+
+/*****************************************************************************/
+/* TODO REMOVE THESE TWO MACROS */
+#define STAI_EVENT_NODE_START_CB
+#define STAI_EVENT_NODE_STOP_CB
+
+#ifdef STAI_EVENT_NODE_START_CB
+#ifndef _STAI_NETWORK_EVENT_NODE_START_CB
+  #define _STAI_NETWORK_EVENT_NODE_START_CB(_node_id, _buffers_size, ...) \
+  if (net_ctx->_callback) { \
+    const stai_event_node_start_stop _start_event = { \
+      .node_id=(_node_id), \
+      .buffers={ \
+        .size=(_buffers_size), \
+        .data=(stai_ptr const*)(const stai_ptr[_buffers_size])STAI_PACK(__VA_ARGS__) \
+      } \
+    }; \
+    net_ctx->_callback(net_ctx->_callback_cookie, STAI_EVENT_NODE_START, (const void*)&_start_event); \
+  }
+#endif
+#else
+  #define _STAI_NETWORK_EVENT_NODE_START_CB(_node_id, _buffers_size, ...) \
+    do { /* _STAI_NETWORK_EVENT_NODE_START_CB() */ } while(0);
+#endif      /* STAI_EVENT_NODE_START_CB */
+
+#ifdef STAI_EVENT_NODE_STOP_CB
+#ifndef _STAI_NETWORK_EVENT_NODE_STOP_CB
+  #define _STAI_NETWORK_EVENT_NODE_STOP_CB(_node_id, _buffers_size, ...) \
+  if (net_ctx->_callback) { \
+    const stai_event_node_start_stop _stop_event = { \
+      .node_id=(_node_id), \
+      .buffers={ \
+        .size=(_buffers_size), \
+        .data=(stai_ptr const*)(stai_ptr[_buffers_size])STAI_PACK(__VA_ARGS__) \
+      } \
+    }; \
+    net_ctx->_callback(net_ctx->_callback_cookie, STAI_EVENT_NODE_STOP, (const void*)&_stop_event); \
+  }
+#endif
+#else
+  #define _STAI_NETWORK_EVENT_NODE_STOP_CB(_node_id, _buffers_size, ...) \
+    do { /* _STAI_NETWORK_EVENT_NODE_STOP_CB() */ } while(0);
+#endif      /* STAI_EVENT_NODE_STOP_CB */
+
+
+/*****************************************************************************/
+#define _STAI_NETWORK_MODEL_SIGNATURE     "0xc5b029527cb6f874e057613fc10bae1b"
+#define _STAI_NETWORK_DATETIME            "2025-08-27T19:19:17+0200"
+#define _STAI_NETWORK_COMPILE_DATETIME    __DATE__ " " __TIME__
+
+#define _STAI_CONTEXT_ALIGNMENT        (STAI_NETWORK_CONTEXT_ALIGNMENT)
+
+/*****************************************************************************/
+#define g_network_activations_1     (NULL)
+#define g_network_activations_2     (NULL)
+
+
+
+
+#if defined(HAVE_NETWORK_INFO)
+/*****************************************************************************/
+static const stai_network_info g_network_info = {
+  .model_signature = _STAI_NETWORK_MODEL_SIGNATURE,
+  .c_compile_datetime = _STAI_NETWORK_COMPILE_DATETIME,
+  .c_model_name = STAI_NETWORK_MODEL_NAME,
+  .c_model_datetime = _STAI_NETWORK_DATETIME,
+  .c_model_signature = 0x0,
+  .runtime_version = STAI_INIT_VERSION(10, 2, 0),
+  .tool_version = STAI_INIT_VERSION(2, 2, 0),
+  .api_version = STAI_INIT_VERSION(1, 0, 0),
+  .n_macc = STAI_NETWORK_MACC_NUM,
+  .n_nodes = STAI_NETWORK_NODES_NUM,
+  .flags = STAI_NETWORK_FLAGS,
+  .n_inputs = STAI_NETWORK_IN_NUM,
+  .n_outputs = STAI_NETWORK_OUT_NUM,
+  .n_activations = STAI_NETWORK_ACTIVATIONS_NUM,
+  .n_weights = STAI_NETWORK_WEIGHTS_NUM,
+  .n_states = STAI_NETWORK_STATES_NUM,
+  .inputs = (stai_tensor[STAI_NETWORK_IN_NUM]) {
+    STAI_INIT_TENSOR(
+      STAI_NETWORK_IN_1_NAME,
+      STAI_NETWORK_IN_1_FLAGS,
+      STAI_NETWORK_IN_1_FORMAT,
+      STAI_NETWORK_IN_1_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 4, 1, 3, 112, 112),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    },
+    .outputs = (stai_tensor[STAI_NETWORK_OUT_NUM]) {
+    STAI_INIT_TENSOR(
+      STAI_NETWORK_OUT_1_NAME,
+      STAI_NETWORK_OUT_1_FLAGS,
+      STAI_NETWORK_OUT_1_FORMAT,
+      STAI_NETWORK_OUT_1_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 2, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    },
+  .activations = (stai_tensor[STAI_NETWORK_ACTIVATIONS_NUM]) {
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_ACTIVATION_1_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_ACTIVATION_1_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 301056),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_ACTIVATION_2_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_ACTIVATION_2_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1708032),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    },
+  .weights = (stai_tensor[STAI_NETWORK_WEIGHTS_NUM]) {
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_1_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_1_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 13824),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_2_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_2_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_3_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_3_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 516),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_4_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_4_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 9216),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_5_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_5_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_6_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_6_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 516),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_7_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_7_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 65536),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_8_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_8_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_9_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_9_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 516),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_10_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_10_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 4608),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_11_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_11_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_12_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_12_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 516),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_13_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_13_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 65536),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_14_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_14_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_15_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_15_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 65536),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_16_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_16_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_17_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_17_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 516),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_18_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_18_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 4608),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_19_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_19_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_20_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_20_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 516),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_21_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_21_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 65536),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_22_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_22_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_23_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_23_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 65536),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_24_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_24_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_25_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_25_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 516),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_26_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_26_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 4608),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_27_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_27_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_28_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_28_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 516),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_29_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_29_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 65536),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_30_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_30_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_31_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_31_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 65536),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_32_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_32_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_33_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_33_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 516),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_34_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_34_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 4608),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_35_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_35_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_36_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_36_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 516),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_37_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_37_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 65536),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_38_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_38_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_39_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_39_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 65536),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_40_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_40_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_41_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_41_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 516),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_42_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_42_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 4608),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_43_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_43_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_44_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_44_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 516),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_45_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_45_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 65536),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_46_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_46_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 512),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_47_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_47_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 131072),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_48_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_48_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_49_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_49_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_50_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_50_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 9216),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_51_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_51_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_52_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_52_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_53_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_53_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_54_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_54_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_55_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_55_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_56_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_56_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_57_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_57_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_58_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_58_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 9216),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_59_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_59_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_60_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_60_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_61_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_61_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_62_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_62_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_63_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_63_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_64_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_64_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_65_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_65_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_66_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_66_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 9216),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_67_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_67_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_68_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_68_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_69_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_69_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_70_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_70_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_71_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_71_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_72_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_72_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_73_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_73_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_74_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_74_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 9216),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_75_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_75_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_76_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_76_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_77_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_77_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_78_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_78_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_79_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_79_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_80_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_80_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_81_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_81_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_82_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_82_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 9216),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_83_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_83_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_84_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_84_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_85_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_85_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_86_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_86_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_87_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_87_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_88_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_88_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_89_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_89_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_90_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_90_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 9216),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_91_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_91_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_92_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_92_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_93_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_93_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_94_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_94_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_95_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_95_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_96_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_96_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_97_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_97_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_98_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_98_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 9216),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_99_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_99_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_100_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_100_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_101_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_101_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_102_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_102_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_103_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_103_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 524288),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_104_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_104_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 2048),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_105_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_105_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 2052),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_106_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_106_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 18432),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_107_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_107_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 2048),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_108_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_108_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 2052),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_109_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_109_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 524288),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_110_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_110_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_111_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_111_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_112_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_112_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_113_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_113_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_114_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_114_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 9216),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_115_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_115_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_116_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_116_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_117_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_117_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_118_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_118_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_119_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_119_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_120_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_120_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_121_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_121_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_122_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_122_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 9216),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_123_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_123_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_124_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_124_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1028),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_125_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_125_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 262144),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_126_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_126_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 1024),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_127_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_127_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 524288),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_128_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_128_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 2048),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_129_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_129_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 2052),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_130_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_130_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 131072),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_131_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_131_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 256),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_132_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_132_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 260),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_133_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_133_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 6422528),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    STAI_INIT_TENSOR(
+      (NULL),
+      STAI_NETWORK_WEIGHT_134_FLAGS,
+      STAI_FORMAT_U8,
+      STAI_NETWORK_WEIGHT_134_SIZE_BYTES,
+      STAI_DECLARE_ARRAY(int32_t, 1, 2048),
+      STAI_EMPTY_ARRAY(),
+      STAI_EMPTY_ARRAY()),
+    },
+
+  .states = NULL
+};
+#endif
+
+#define _STAI_CONTEXT_ACQUIRE(_net_ctx, _net_handle) \
+  _stai_network_context* _net_ctx = (_stai_network_context*)(_net_handle); \
+  STAI_ASSERT(_net_ctx != NULL) \
+  _STAI_SET_ERROR(_net_ctx, _net_ctx->_magic != STAI_MAGIC, \
+                  STAI_ERROR_NETWORK_INVALID_CONTEXT_HANDLE, _net_ctx->_return_code)
+
+
+/*****************************************************************************/
+static
+void _stai_network_check(_stai_network_context* net_ctx)
+{
+  stai_size idx;
+
+// Check activations status
+  for (idx=0; idx<STAI_NETWORK_ACTIVATIONS_NUM; idx++) {
+    if (net_ctx->_activations[idx] == NULL) break;
+  }
+  net_ctx->_flags |= (idx == STAI_NETWORK_ACTIVATIONS_NUM) ? STAI_FLAG_ACTIVATIONS : STAI_FLAG_NONE;
+// Check inputs status
+  for (idx=0; idx<STAI_NETWORK_IN_NUM; idx++) {
+    if (net_ctx->_inputs[idx] == NULL) break;
+  }
+  net_ctx->_flags |= (idx == STAI_NETWORK_IN_NUM) ? STAI_FLAG_INPUTS : STAI_FLAG_NONE;
+
+  // Check outputs status
+  for (idx=0; idx<STAI_NETWORK_OUT_NUM; idx++) {
+    if (net_ctx->_outputs[idx] == NULL) break;
+  }
+  net_ctx->_flags |= (idx == STAI_NETWORK_OUT_NUM) ? STAI_FLAG_OUTPUTS : STAI_FLAG_NONE;
+
+// Check weights status
+  for (idx=0; idx<STAI_NETWORK_WEIGHTS_NUM; idx++) {
+    if (net_ctx->_weights[idx] == NULL) break;
+  }
+  net_ctx->_flags |= (idx == STAI_NETWORK_WEIGHTS_NUM) ? STAI_FLAG_WEIGHTS : STAI_FLAG_NONE;
+STAI_PRINT("  [_stai_network_check] flags: 0x%08x\n", net_ctx->_flags)
+}
+
+
+/*****************************************************************************/
+STAI_API_ENTRY
+stai_return_code stai_network_init(
+  stai_network* network)
+{
+  /* Memory where to store internal context is provided by applications as a raw byte buffer */
+  _stai_network_context* net_ctx = (_stai_network_context*)(network);
+  net_ctx->_return_code = STAI_SUCCESS;
+  STAI_PRINT("[Entering Network Init] network(%p) context_size(%d)\n", net_ctx, (int32_t)sizeof(_stai_network_context))
+
+  _STAI_SET_ERROR(net_ctx, STAI_NETWORK_CONTEXT_SIZE != sizeof(_stai_network_context),
+                 STAI_ERROR_NETWORK_INVALID_CONTEXT_SIZE, net_ctx->_return_code)
+
+  {
+    const _stai_network_context _network_context = {
+      ._magic = STAI_MAGIC,
+      ._signature = STAI_NETWORK_MODEL_SIGNATURE,
+      ._flags = STAI_NETWORK_FLAGS,
+      ._return_code = STAI_SUCCESS,
+      ._callback = NULL,
+      ._callback_cookie = NULL,
+      ._activations = {
+      (stai_ptr)g_network_activations_1,(stai_ptr)g_network_activations_2
+      },
+      ._weights = {
+      NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+      },
+      ._inputs = {
+    NULL},
+      ._outputs = {
+    NULL},
+    };
+
+    // Deep copy of internal context to opaque buffer provided by app
+    *net_ctx = _network_context;
+
+    _stai_network_check(net_ctx);
+  }
+
+  return net_ctx->_return_code;
+}
+
+
+STAI_API_ENTRY
+stai_return_code stai_network_deinit(
+  stai_network* network)
+{
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+
+  /*  Reset flags to initial state  */
+  net_ctx->_flags = STAI_NETWORK_FLAGS;
+  return net_ctx->_return_code;
+}
+
+/*****************************************************************************/
+
+
+
+
+
+/* Array#0 */
+AI_ARRAY_OBJ_DECLARE(
+  input_1_output_array, AI_ARRAY_FORMAT_FLOAT|AI_FMT_FLAG_IS_IO,
+  NULL, NULL, 37632, AI_STATIC)
+
+/* Array#1 */
+AI_ARRAY_OBJ_DECLARE(
+  input_1_Transpose_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 37632, AI_STATIC)
+
+/* Array#2 */
+AI_ARRAY_OBJ_DECLARE(
+  node_529_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 100352, AI_STATIC)
+
+/* Array#3 */
+AI_ARRAY_OBJ_DECLARE(
+  node_538_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 100352, AI_STATIC)
+
+/* Array#4 */
+AI_ARRAY_OBJ_DECLARE(
+  node_364_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 100352, AI_STATIC)
+
+/* Array#5 */
+AI_ARRAY_OBJ_DECLARE(
+  node_547_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 100352, AI_STATIC)
+
+/* Array#6 */
+AI_ARRAY_OBJ_DECLARE(
+  node_375_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 100352, AI_STATIC)
+
+/* Array#7 */
+AI_ARRAY_OBJ_DECLARE(
+  node_556_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 100352, AI_STATIC)
+
+/* Array#8 */
+AI_ARRAY_OBJ_DECLARE(
+  node_386_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 100352, AI_STATIC)
+
+/* Array#9 */
+AI_ARRAY_OBJ_DECLARE(
+  node_565_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 100352, AI_STATIC)
+
+/* Array#10 */
+AI_ARRAY_OBJ_DECLARE(
+  node_397_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 100352, AI_STATIC)
+
+/* Array#11 */
+AI_ARRAY_OBJ_DECLARE(
+  node_574_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 50176, AI_STATIC)
+
+/* Array#12 */
+AI_ARRAY_OBJ_DECLARE(
+  node_583_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 50176, AI_STATIC)
+
+/* Array#13 */
+AI_ARRAY_OBJ_DECLARE(
+  node_418_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 50176, AI_STATIC)
+
+/* Array#14 */
+AI_ARRAY_OBJ_DECLARE(
+  node_592_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 50176, AI_STATIC)
+
+/* Array#15 */
+AI_ARRAY_OBJ_DECLARE(
+  node_429_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 50176, AI_STATIC)
+
+/* Array#16 */
+AI_ARRAY_OBJ_DECLARE(
+  node_601_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 50176, AI_STATIC)
+
+/* Array#17 */
+AI_ARRAY_OBJ_DECLARE(
+  node_440_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 50176, AI_STATIC)
+
+/* Array#18 */
+AI_ARRAY_OBJ_DECLARE(
+  node_610_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 50176, AI_STATIC)
+
+/* Array#19 */
+AI_ARRAY_OBJ_DECLARE(
+  node_451_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 50176, AI_STATIC)
+
+/* Array#20 */
+AI_ARRAY_OBJ_DECLARE(
+  node_619_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 50176, AI_STATIC)
+
+/* Array#21 */
+AI_ARRAY_OBJ_DECLARE(
+  node_462_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 50176, AI_STATIC)
+
+/* Array#22 */
+AI_ARRAY_OBJ_DECLARE(
+  node_628_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 50176, AI_STATIC)
+
+/* Array#23 */
+AI_ARRAY_OBJ_DECLARE(
+  node_473_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 50176, AI_STATIC)
+
+/* Array#24 */
+AI_ARRAY_OBJ_DECLARE(
+  node_637_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 12544, AI_STATIC)
+
+/* Array#25 */
+AI_ARRAY_OBJ_DECLARE(
+  node_646_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 12544, AI_STATIC)
+
+/* Array#26 */
+AI_ARRAY_OBJ_DECLARE(
+  node_494_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 12544, AI_STATIC)
+
+/* Array#27 */
+AI_ARRAY_OBJ_DECLARE(
+  node_655_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 12544, AI_STATIC)
+
+/* Array#28 */
+AI_ARRAY_OBJ_DECLARE(
+  node_505_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 12544, AI_STATIC)
+
+/* Array#29 */
+AI_ARRAY_OBJ_DECLARE(
+  node_513_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 3136, AI_STATIC)
+
+/* Array#30 */
+AI_ARRAY_OBJ_DECLARE(
+  node_514_to_chlast_output_array, AI_ARRAY_FORMAT_FLOAT,
+  NULL, NULL, 3136, AI_STATIC)
+
+
+
+/* Tensor #0 */
+AI_TENSOR_OBJ_DECLARE(
+  input_1_Transpose_output, AI_STATIC,
+  0, 0x0,
+  AI_SHAPE_INIT(4, 1, 3, 112, 112), AI_STRIDE_INIT(4, 4, 4, 12, 1344),
+  1, &input_1_Transpose_output_array, NULL)
+
+/* Tensor #1 */
+AI_TENSOR_OBJ_DECLARE(
+  input_1_output, AI_STATIC,
+  1, 0x0,
+  AI_SHAPE_INIT(4, 1, 112, 112, 3), AI_STRIDE_INIT(4, 4, 4, 448, 50176),
+  1, &input_1_output_array, NULL)
+
+/* Tensor #2 */
+AI_TENSOR_OBJ_DECLARE(
+  node_364_output, AI_STATIC,
+  14, 0x0,
+  AI_SHAPE_INIT(4, 1, 128, 28, 28), AI_STRIDE_INIT(4, 4, 4, 512, 14336),
+  1, &node_364_output_array, NULL)
+
+/* Tensor #3 */
+AI_TENSOR_OBJ_DECLARE(
+  node_529_output, AI_STATIC,
+  102, 0x0,
+  AI_SHAPE_INIT(4, 1, 128, 28, 28), AI_STRIDE_INIT(4, 4, 4, 512, 14336),
+  1, &node_529_output_array, NULL)
+
+/* Tensor #4 */
+AI_TENSOR_OBJ_DECLARE(
+  node_538_output, AI_STATIC,
+  113, 0x0,
+  AI_SHAPE_INIT(4, 1, 128, 28, 28), AI_STRIDE_INIT(4, 4, 4, 512, 14336),
+  1, &node_538_output_array, NULL)
+
+/* Tensor #5 */
+AI_TENSOR_OBJ_DECLARE(
+  node_375_output, AI_STATIC,
+  19, 0x0,
+  AI_SHAPE_INIT(4, 1, 128, 28, 28), AI_STRIDE_INIT(4, 4, 4, 512, 14336),
+  1, &node_375_output_array, NULL)
+
+/* Tensor #6 */
+AI_TENSOR_OBJ_DECLARE(
+  node_547_output, AI_STATIC,
+  124, 0x0,
+  AI_SHAPE_INIT(4, 1, 128, 28, 28), AI_STRIDE_INIT(4, 4, 4, 512, 14336),
+  1, &node_547_output_array, NULL)
+
+/* Tensor #7 */
+AI_TENSOR_OBJ_DECLARE(
+  node_386_output, AI_STATIC,
+  24, 0x0,
+  AI_SHAPE_INIT(4, 1, 128, 28, 28), AI_STRIDE_INIT(4, 4, 4, 512, 14336),
+  1, &node_386_output_array, NULL)
+
+/* Tensor #8 */
+AI_TENSOR_OBJ_DECLARE(
+  node_556_output, AI_STATIC,
+  135, 0x0,
+  AI_SHAPE_INIT(4, 1, 128, 28, 28), AI_STRIDE_INIT(4, 4, 4, 512, 14336),
+  1, &node_556_output_array, NULL)
+
+/* Tensor #9 */
+AI_TENSOR_OBJ_DECLARE(
+  node_397_output, AI_STATIC,
+  29, 0x0,
+  AI_SHAPE_INIT(4, 1, 128, 28, 28), AI_STRIDE_INIT(4, 4, 4, 512, 14336),
+  1, &node_397_output_array, NULL)
+
+/* Tensor #10 */
+AI_TENSOR_OBJ_DECLARE(
+  node_565_output, AI_STATIC,
+  146, 0x0,
+  AI_SHAPE_INIT(4, 1, 128, 28, 28), AI_STRIDE_INIT(4, 4, 4, 512, 14336),
+  1, &node_565_output_array, NULL)
+
+/* Tensor #11 */
+AI_TENSOR_OBJ_DECLARE(
+  node_418_output, AI_STATIC,
+  38, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 14, 14), AI_STRIDE_INIT(4, 4, 4, 1024, 14336),
+  1, &node_418_output_array, NULL)
+
+/* Tensor #12 */
+AI_TENSOR_OBJ_DECLARE(
+  node_574_output, AI_STATIC,
+  157, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 14, 14), AI_STRIDE_INIT(4, 4, 4, 1024, 14336),
+  1, &node_574_output_array, NULL)
+
+/* Tensor #13 */
+AI_TENSOR_OBJ_DECLARE(
+  node_583_output, AI_STATIC,
+  168, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 14, 14), AI_STRIDE_INIT(4, 4, 4, 1024, 14336),
+  1, &node_583_output_array, NULL)
+
+/* Tensor #14 */
+AI_TENSOR_OBJ_DECLARE(
+  node_429_output, AI_STATIC,
+  43, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 14, 14), AI_STRIDE_INIT(4, 4, 4, 1024, 14336),
+  1, &node_429_output_array, NULL)
+
+/* Tensor #15 */
+AI_TENSOR_OBJ_DECLARE(
+  node_592_output, AI_STATIC,
+  179, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 14, 14), AI_STRIDE_INIT(4, 4, 4, 1024, 14336),
+  1, &node_592_output_array, NULL)
+
+/* Tensor #16 */
+AI_TENSOR_OBJ_DECLARE(
+  node_440_output, AI_STATIC,
+  48, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 14, 14), AI_STRIDE_INIT(4, 4, 4, 1024, 14336),
+  1, &node_440_output_array, NULL)
+
+/* Tensor #17 */
+AI_TENSOR_OBJ_DECLARE(
+  node_601_output, AI_STATIC,
+  190, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 14, 14), AI_STRIDE_INIT(4, 4, 4, 1024, 14336),
+  1, &node_601_output_array, NULL)
+
+/* Tensor #18 */
+AI_TENSOR_OBJ_DECLARE(
+  node_451_output, AI_STATIC,
+  53, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 14, 14), AI_STRIDE_INIT(4, 4, 4, 1024, 14336),
+  1, &node_451_output_array, NULL)
+
+/* Tensor #19 */
+AI_TENSOR_OBJ_DECLARE(
+  node_610_output, AI_STATIC,
+  201, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 14, 14), AI_STRIDE_INIT(4, 4, 4, 1024, 14336),
+  1, &node_610_output_array, NULL)
+
+/* Tensor #20 */
+AI_TENSOR_OBJ_DECLARE(
+  node_462_output, AI_STATIC,
+  58, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 14, 14), AI_STRIDE_INIT(4, 4, 4, 1024, 14336),
+  1, &node_462_output_array, NULL)
+
+/* Tensor #21 */
+AI_TENSOR_OBJ_DECLARE(
+  node_619_output, AI_STATIC,
+  212, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 14, 14), AI_STRIDE_INIT(4, 4, 4, 1024, 14336),
+  1, &node_619_output_array, NULL)
+
+/* Tensor #22 */
+AI_TENSOR_OBJ_DECLARE(
+  node_473_output, AI_STATIC,
+  63, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 14, 14), AI_STRIDE_INIT(4, 4, 4, 1024, 14336),
+  1, &node_473_output_array, NULL)
+
+/* Tensor #23 */
+AI_TENSOR_OBJ_DECLARE(
+  node_628_output, AI_STATIC,
+  223, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 14, 14), AI_STRIDE_INIT(4, 4, 4, 1024, 14336),
+  1, &node_628_output_array, NULL)
+
+/* Tensor #24 */
+AI_TENSOR_OBJ_DECLARE(
+  node_494_output, AI_STATIC,
+  72, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 7, 7), AI_STRIDE_INIT(4, 4, 4, 1024, 7168),
+  1, &node_494_output_array, NULL)
+
+/* Tensor #25 */
+AI_TENSOR_OBJ_DECLARE(
+  node_637_output, AI_STATIC,
+  234, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 7, 7), AI_STRIDE_INIT(4, 4, 4, 1024, 7168),
+  1, &node_637_output_array, NULL)
+
+/* Tensor #26 */
+AI_TENSOR_OBJ_DECLARE(
+  node_646_output, AI_STATIC,
+  245, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 7, 7), AI_STRIDE_INIT(4, 4, 4, 1024, 7168),
+  1, &node_646_output_array, NULL)
+
+/* Tensor #27 */
+AI_TENSOR_OBJ_DECLARE(
+  node_505_output, AI_STATIC,
+  77, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 7, 7), AI_STRIDE_INIT(4, 4, 4, 1024, 7168),
+  1, &node_505_output_array, NULL)
+
+/* Tensor #28 */
+AI_TENSOR_OBJ_DECLARE(
+  node_655_output, AI_STATIC,
+  256, 0x0,
+  AI_SHAPE_INIT(4, 1, 256, 7, 7), AI_STRIDE_INIT(4, 4, 4, 1024, 7168),
+  1, &node_655_output_array, NULL)
+
+/* Tensor #29 */
+AI_TENSOR_OBJ_DECLARE(
+  node_513_output, AI_STATIC,
+  81, 0x0,
+  AI_SHAPE_INIT(4, 1, 64, 7, 7), AI_STRIDE_INIT(4, 4, 4, 256, 1792),
+  1, &node_513_output_array, NULL)
+
+/* Tensor #30 */
+AI_TENSOR_OBJ_DECLARE(
+  node_514_to_chlast_output, AI_STATIC,
+  82, 0x0,
+  AI_SHAPE_INIT(4, 1, 7, 7, 64), AI_STRIDE_INIT(4, 4, 4, 28, 196),
+  1, &node_514_to_chlast_output_array, NULL)
+
+
+AI_TENSOR_CHAIN_OBJ_DECLARE(
+  input_1_Transpose_chain, AI_STATIC_CONST, 4,
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &input_1_output),
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &input_1_Transpose_output),
+  AI_TENSOR_LIST_OBJ_EMPTY,
+  AI_TENSOR_LIST_OBJ_EMPTY
+)
+
+AI_LAYER_OBJ_DECLARE(
+  input_1_Transpose_layer, 2,
+  TRANSPOSE_TYPE, 0x0, NULL,
+  transpose, forward_transpose,
+  &input_1_Transpose_chain,
+  NULL, &input_1_Transpose_layer, AI_STATIC, 
+  .out_mapping = AI_SHAPE_INIT(6, AI_SHAPE_IN_CHANNEL, AI_SHAPE_HEIGHT, AI_SHAPE_CHANNEL, AI_SHAPE_WIDTH, AI_SHAPE_DEPTH, AI_SHAPE_EXTENSION), 
+)
+
+AI_TENSOR_CHAIN_OBJ_DECLARE(
+  node_364_chain, AI_STATIC_CONST, 4,
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 2, &node_529_output, &node_538_output),
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &node_364_output),
+  AI_TENSOR_LIST_OBJ_EMPTY,
+  AI_TENSOR_LIST_OBJ_EMPTY
+)
+
+AI_LAYER_OBJ_DECLARE(
+  node_364_layer, 15,
+  ELTWISE_TYPE, 0x0, NULL,
+  eltwise, forward_eltwise,
+  &node_364_chain,
+  NULL, &node_364_layer, AI_STATIC, 
+  .operation = ai_sum_f32, 
+  .buffer_operation = ai_sum_buffer_f32, 
+)
+
+AI_TENSOR_CHAIN_OBJ_DECLARE(
+  node_375_chain, AI_STATIC_CONST, 4,
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 2, &node_364_output, &node_547_output),
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &node_375_output),
+  AI_TENSOR_LIST_OBJ_EMPTY,
+  AI_TENSOR_LIST_OBJ_EMPTY
+)
+
+AI_LAYER_OBJ_DECLARE(
+  node_375_layer, 21,
+  ELTWISE_TYPE, 0x0, NULL,
+  eltwise, forward_eltwise,
+  &node_375_chain,
+  NULL, &node_375_layer, AI_STATIC, 
+  .operation = ai_sum_f32, 
+  .buffer_operation = ai_sum_buffer_f32, 
+)
+
+AI_TENSOR_CHAIN_OBJ_DECLARE(
+  node_386_chain, AI_STATIC_CONST, 4,
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 2, &node_375_output, &node_556_output),
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &node_386_output),
+  AI_TENSOR_LIST_OBJ_EMPTY,
+  AI_TENSOR_LIST_OBJ_EMPTY
+)
+
+AI_LAYER_OBJ_DECLARE(
+  node_386_layer, 27,
+  ELTWISE_TYPE, 0x0, NULL,
+  eltwise, forward_eltwise,
+  &node_386_chain,
+  NULL, &node_386_layer, AI_STATIC, 
+  .operation = ai_sum_f32, 
+  .buffer_operation = ai_sum_buffer_f32, 
+)
+
+AI_TENSOR_CHAIN_OBJ_DECLARE(
+  node_397_chain, AI_STATIC_CONST, 4,
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 2, &node_386_output, &node_565_output),
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &node_397_output),
+  AI_TENSOR_LIST_OBJ_EMPTY,
+  AI_TENSOR_LIST_OBJ_EMPTY
+)
+
+AI_LAYER_OBJ_DECLARE(
+  node_397_layer, 33,
+  ELTWISE_TYPE, 0x0, NULL,
+  eltwise, forward_eltwise,
+  &node_397_chain,
+  NULL, &node_397_layer, AI_STATIC, 
+  .operation = ai_sum_f32, 
+  .buffer_operation = ai_sum_buffer_f32, 
+)
+
+AI_TENSOR_CHAIN_OBJ_DECLARE(
+  node_418_chain, AI_STATIC_CONST, 4,
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 2, &node_574_output, &node_583_output),
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &node_418_output),
+  AI_TENSOR_LIST_OBJ_EMPTY,
+  AI_TENSOR_LIST_OBJ_EMPTY
+)
+
+AI_LAYER_OBJ_DECLARE(
+  node_418_layer, 44,
+  ELTWISE_TYPE, 0x0, NULL,
+  eltwise, forward_eltwise,
+  &node_418_chain,
+  NULL, &node_418_layer, AI_STATIC, 
+  .operation = ai_sum_f32, 
+  .buffer_operation = ai_sum_buffer_f32, 
+)
+
+AI_TENSOR_CHAIN_OBJ_DECLARE(
+  node_429_chain, AI_STATIC_CONST, 4,
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 2, &node_418_output, &node_592_output),
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &node_429_output),
+  AI_TENSOR_LIST_OBJ_EMPTY,
+  AI_TENSOR_LIST_OBJ_EMPTY
+)
+
+AI_LAYER_OBJ_DECLARE(
+  node_429_layer, 50,
+  ELTWISE_TYPE, 0x0, NULL,
+  eltwise, forward_eltwise,
+  &node_429_chain,
+  NULL, &node_429_layer, AI_STATIC, 
+  .operation = ai_sum_f32, 
+  .buffer_operation = ai_sum_buffer_f32, 
+)
+
+AI_TENSOR_CHAIN_OBJ_DECLARE(
+  node_440_chain, AI_STATIC_CONST, 4,
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 2, &node_429_output, &node_601_output),
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &node_440_output),
+  AI_TENSOR_LIST_OBJ_EMPTY,
+  AI_TENSOR_LIST_OBJ_EMPTY
+)
+
+AI_LAYER_OBJ_DECLARE(
+  node_440_layer, 56,
+  ELTWISE_TYPE, 0x0, NULL,
+  eltwise, forward_eltwise,
+  &node_440_chain,
+  NULL, &node_440_layer, AI_STATIC, 
+  .operation = ai_sum_f32, 
+  .buffer_operation = ai_sum_buffer_f32, 
+)
+
+AI_TENSOR_CHAIN_OBJ_DECLARE(
+  node_451_chain, AI_STATIC_CONST, 4,
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 2, &node_440_output, &node_610_output),
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &node_451_output),
+  AI_TENSOR_LIST_OBJ_EMPTY,
+  AI_TENSOR_LIST_OBJ_EMPTY
+)
+
+AI_LAYER_OBJ_DECLARE(
+  node_451_layer, 62,
+  ELTWISE_TYPE, 0x0, NULL,
+  eltwise, forward_eltwise,
+  &node_451_chain,
+  NULL, &node_451_layer, AI_STATIC, 
+  .operation = ai_sum_f32, 
+  .buffer_operation = ai_sum_buffer_f32, 
+)
+
+AI_TENSOR_CHAIN_OBJ_DECLARE(
+  node_462_chain, AI_STATIC_CONST, 4,
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 2, &node_451_output, &node_619_output),
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &node_462_output),
+  AI_TENSOR_LIST_OBJ_EMPTY,
+  AI_TENSOR_LIST_OBJ_EMPTY
+)
+
+AI_LAYER_OBJ_DECLARE(
+  node_462_layer, 68,
+  ELTWISE_TYPE, 0x0, NULL,
+  eltwise, forward_eltwise,
+  &node_462_chain,
+  NULL, &node_462_layer, AI_STATIC, 
+  .operation = ai_sum_f32, 
+  .buffer_operation = ai_sum_buffer_f32, 
+)
+
+AI_TENSOR_CHAIN_OBJ_DECLARE(
+  node_473_chain, AI_STATIC_CONST, 4,
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 2, &node_462_output, &node_628_output),
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &node_473_output),
+  AI_TENSOR_LIST_OBJ_EMPTY,
+  AI_TENSOR_LIST_OBJ_EMPTY
+)
+
+AI_LAYER_OBJ_DECLARE(
+  node_473_layer, 74,
+  ELTWISE_TYPE, 0x0, NULL,
+  eltwise, forward_eltwise,
+  &node_473_chain,
+  NULL, &node_473_layer, AI_STATIC, 
+  .operation = ai_sum_f32, 
+  .buffer_operation = ai_sum_buffer_f32, 
+)
+
+AI_TENSOR_CHAIN_OBJ_DECLARE(
+  node_494_chain, AI_STATIC_CONST, 4,
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 2, &node_637_output, &node_646_output),
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &node_494_output),
+  AI_TENSOR_LIST_OBJ_EMPTY,
+  AI_TENSOR_LIST_OBJ_EMPTY
+)
+
+AI_LAYER_OBJ_DECLARE(
+  node_494_layer, 85,
+  ELTWISE_TYPE, 0x0, NULL,
+  eltwise, forward_eltwise,
+  &node_494_chain,
+  NULL, &node_494_layer, AI_STATIC, 
+  .operation = ai_sum_f32, 
+  .buffer_operation = ai_sum_buffer_f32, 
+)
+
+AI_TENSOR_CHAIN_OBJ_DECLARE(
+  node_505_chain, AI_STATIC_CONST, 4,
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 2, &node_494_output, &node_655_output),
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &node_505_output),
+  AI_TENSOR_LIST_OBJ_EMPTY,
+  AI_TENSOR_LIST_OBJ_EMPTY
+)
+
+AI_LAYER_OBJ_DECLARE(
+  node_505_layer, 91,
+  ELTWISE_TYPE, 0x0, NULL,
+  eltwise, forward_eltwise,
+  &node_505_chain,
+  NULL, &node_505_layer, AI_STATIC, 
+  .operation = ai_sum_f32, 
+  .buffer_operation = ai_sum_buffer_f32, 
+)
+
+AI_TENSOR_CHAIN_OBJ_DECLARE(
+  node_514_to_chlast_chain, AI_STATIC_CONST, 4,
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &node_513_output),
+  AI_TENSOR_LIST_OBJ_INIT(AI_FLAG_NONE, 1, &node_514_to_chlast_output),
+  AI_TENSOR_LIST_OBJ_EMPTY,
+  AI_TENSOR_LIST_OBJ_EMPTY
+)
+
+AI_LAYER_OBJ_DECLARE(
+  node_514_to_chlast_layer, 96,
+  TRANSPOSE_TYPE, 0x0, NULL,
+  transpose, forward_transpose,
+  &node_514_to_chlast_chain,
+  NULL, &node_514_to_chlast_layer, AI_STATIC, 
+  .out_mapping = AI_SHAPE_INIT(6, AI_SHAPE_IN_CHANNEL, AI_SHAPE_WIDTH, AI_SHAPE_HEIGHT, AI_SHAPE_CHANNEL, AI_SHAPE_DEPTH, AI_SHAPE_EXTENSION), 
+)
+/**  Hybrid layers declarations section  *************************************/
+void forward_lite_input_1_Transpose(_stai_network_context* net_ctx)
+{
+  input_1_output_array.data = AI_PTR(net_ctx->_inputs[0] + 0);
+  input_1_output_array.data_start = AI_PTR(net_ctx->_inputs[0] + 0);
+  input_1_Transpose_output_array.data = AI_PTR(net_ctx->_activations[0] + 150528);
+  input_1_Transpose_output_array.data_start = AI_PTR(net_ctx->_activations[0] + 150528);
+  _STAI_NETWORK_EVENT_NODE_START_CB(2, 1, { input_1_output.data->data});
+  forward_transpose(&input_1_Transpose_layer);
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(2, 1, { input_1_Transpose_output.data->data});
+}
+void forward_lite_node_364(_stai_network_context* net_ctx)
+{
+  node_529_output_array.data = AI_PTR(net_ctx->_activations[1] + 0);
+  node_529_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 0);
+  node_538_output_array.data = AI_PTR(net_ctx->_activations[1] + 1306624);
+  node_538_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 1306624);
+  node_364_output_array.data = AI_PTR(net_ctx->_activations[1] + 401408);
+  node_364_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 401408);
+  _STAI_NETWORK_EVENT_NODE_START_CB(15, 2, { node_529_output.data->data,node_538_output.data->data});
+  forward_eltwise(&node_364_layer);
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(15, 1, { node_364_output.data->data});
+}
+void forward_lite_node_375(_stai_network_context* net_ctx)
+{
+  node_364_output_array.data = AI_PTR(net_ctx->_activations[1] + 401408);
+  node_364_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 401408);
+  node_547_output_array.data = AI_PTR(net_ctx->_activations[1] + 1306624);
+  node_547_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 1306624);
+  node_375_output_array.data = AI_PTR(net_ctx->_activations[1] + 0);
+  node_375_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 0);
+  _STAI_NETWORK_EVENT_NODE_START_CB(21, 2, { node_364_output.data->data,node_547_output.data->data});
+  forward_eltwise(&node_375_layer);
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(21, 1, { node_375_output.data->data});
+}
+void forward_lite_node_386(_stai_network_context* net_ctx)
+{
+  node_375_output_array.data = AI_PTR(net_ctx->_activations[1] + 0);
+  node_375_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 0);
+  node_556_output_array.data = AI_PTR(net_ctx->_activations[1] + 1306624);
+  node_556_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 1306624);
+  node_386_output_array.data = AI_PTR(net_ctx->_activations[1] + 401408);
+  node_386_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 401408);
+  _STAI_NETWORK_EVENT_NODE_START_CB(27, 2, { node_375_output.data->data,node_556_output.data->data});
+  forward_eltwise(&node_386_layer);
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(27, 1, { node_386_output.data->data});
+}
+void forward_lite_node_397(_stai_network_context* net_ctx)
+{
+  node_386_output_array.data = AI_PTR(net_ctx->_activations[1] + 401408);
+  node_386_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 401408);
+  node_565_output_array.data = AI_PTR(net_ctx->_activations[1] + 1306624);
+  node_565_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 1306624);
+  node_397_output_array.data = AI_PTR(net_ctx->_activations[1] + 0);
+  node_397_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 0);
+  _STAI_NETWORK_EVENT_NODE_START_CB(33, 2, { node_386_output.data->data,node_565_output.data->data});
+  forward_eltwise(&node_397_layer);
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(33, 1, { node_397_output.data->data});
+}
+void forward_lite_node_418(_stai_network_context* net_ctx)
+{
+  node_574_output_array.data = AI_PTR(net_ctx->_activations[1] + 200704);
+  node_574_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 200704);
+  node_583_output_array.data = AI_PTR(net_ctx->_activations[1] + 1507328);
+  node_583_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 1507328);
+  node_418_output_array.data = AI_PTR(net_ctx->_activations[1] + 0);
+  node_418_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 0);
+  _STAI_NETWORK_EVENT_NODE_START_CB(44, 2, { node_574_output.data->data,node_583_output.data->data});
+  forward_eltwise(&node_418_layer);
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(44, 1, { node_418_output.data->data});
+}
+void forward_lite_node_429(_stai_network_context* net_ctx)
+{
+  node_418_output_array.data = AI_PTR(net_ctx->_activations[1] + 0);
+  node_418_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 0);
+  node_592_output_array.data = AI_PTR(net_ctx->_activations[1] + 1507328);
+  node_592_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 1507328);
+  node_429_output_array.data = AI_PTR(net_ctx->_activations[1] + 200704);
+  node_429_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 200704);
+  _STAI_NETWORK_EVENT_NODE_START_CB(50, 2, { node_418_output.data->data,node_592_output.data->data});
+  forward_eltwise(&node_429_layer);
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(50, 1, { node_429_output.data->data});
+}
+void forward_lite_node_440(_stai_network_context* net_ctx)
+{
+  node_429_output_array.data = AI_PTR(net_ctx->_activations[1] + 200704);
+  node_429_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 200704);
+  node_601_output_array.data = AI_PTR(net_ctx->_activations[1] + 1507328);
+  node_601_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 1507328);
+  node_440_output_array.data = AI_PTR(net_ctx->_activations[1] + 0);
+  node_440_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 0);
+  _STAI_NETWORK_EVENT_NODE_START_CB(56, 2, { node_429_output.data->data,node_601_output.data->data});
+  forward_eltwise(&node_440_layer);
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(56, 1, { node_440_output.data->data});
+}
+void forward_lite_node_451(_stai_network_context* net_ctx)
+{
+  node_440_output_array.data = AI_PTR(net_ctx->_activations[1] + 0);
+  node_440_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 0);
+  node_610_output_array.data = AI_PTR(net_ctx->_activations[1] + 1507328);
+  node_610_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 1507328);
+  node_451_output_array.data = AI_PTR(net_ctx->_activations[1] + 200704);
+  node_451_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 200704);
+  _STAI_NETWORK_EVENT_NODE_START_CB(62, 2, { node_440_output.data->data,node_610_output.data->data});
+  forward_eltwise(&node_451_layer);
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(62, 1, { node_451_output.data->data});
+}
+void forward_lite_node_462(_stai_network_context* net_ctx)
+{
+  node_451_output_array.data = AI_PTR(net_ctx->_activations[1] + 200704);
+  node_451_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 200704);
+  node_619_output_array.data = AI_PTR(net_ctx->_activations[1] + 1507328);
+  node_619_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 1507328);
+  node_462_output_array.data = AI_PTR(net_ctx->_activations[1] + 0);
+  node_462_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 0);
+  _STAI_NETWORK_EVENT_NODE_START_CB(68, 2, { node_451_output.data->data,node_619_output.data->data});
+  forward_eltwise(&node_462_layer);
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(68, 1, { node_462_output.data->data});
+}
+void forward_lite_node_473(_stai_network_context* net_ctx)
+{
+  node_462_output_array.data = AI_PTR(net_ctx->_activations[1] + 0);
+  node_462_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 0);
+  node_628_output_array.data = AI_PTR(net_ctx->_activations[1] + 1507328);
+  node_628_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 1507328);
+  node_473_output_array.data = AI_PTR(net_ctx->_activations[1] + 200704);
+  node_473_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 200704);
+  _STAI_NETWORK_EVENT_NODE_START_CB(74, 2, { node_462_output.data->data,node_628_output.data->data});
+  forward_eltwise(&node_473_layer);
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(74, 1, { node_473_output.data->data});
+}
+void forward_lite_node_494(_stai_network_context* net_ctx)
+{
+  node_637_output_array.data = AI_PTR(net_ctx->_activations[0] + 0);
+  node_637_output_array.data_start = AI_PTR(net_ctx->_activations[0] + 0);
+  node_646_output_array.data = AI_PTR(net_ctx->_activations[1] + 0);
+  node_646_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 0);
+  node_494_output_array.data = AI_PTR(net_ctx->_activations[0] + 50176);
+  node_494_output_array.data_start = AI_PTR(net_ctx->_activations[0] + 50176);
+  _STAI_NETWORK_EVENT_NODE_START_CB(85, 2, { node_637_output.data->data,node_646_output.data->data});
+  forward_eltwise(&node_494_layer);
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(85, 1, { node_494_output.data->data});
+}
+void forward_lite_node_505(_stai_network_context* net_ctx)
+{
+  node_494_output_array.data = AI_PTR(net_ctx->_activations[0] + 50176);
+  node_494_output_array.data_start = AI_PTR(net_ctx->_activations[0] + 50176);
+  node_655_output_array.data = AI_PTR(net_ctx->_activations[1] + 0);
+  node_655_output_array.data_start = AI_PTR(net_ctx->_activations[1] + 0);
+  node_505_output_array.data = AI_PTR(net_ctx->_activations[0] + 0);
+  node_505_output_array.data_start = AI_PTR(net_ctx->_activations[0] + 0);
+  _STAI_NETWORK_EVENT_NODE_START_CB(91, 2, { node_494_output.data->data,node_655_output.data->data});
+  forward_eltwise(&node_505_layer);
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(91, 1, { node_505_output.data->data});
+}
+void forward_lite_node_514_to_chlast(_stai_network_context* net_ctx)
+{
+  node_513_output_array.data = AI_PTR(net_ctx->_activations[0] + 0);
+  node_513_output_array.data_start = AI_PTR(net_ctx->_activations[0] + 0);
+  node_514_to_chlast_output_array.data = AI_PTR(net_ctx->_activations[0] + 288512);
+  node_514_to_chlast_output_array.data_start = AI_PTR(net_ctx->_activations[0] + 288512);
+  _STAI_NETWORK_EVENT_NODE_START_CB(96, 1, { node_513_output.data->data});
+  forward_transpose(&node_514_to_chlast_layer);
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(96, 1, { node_514_to_chlast_output.data->data});
+}
+
+/*****************************************************************************/
+
+
+STAI_API_ENTRY
+stai_return_code stai_network_run(
+  stai_network* network,
+  const stai_run_mode mode)
+{
+   STAI_UNUSED(mode)
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+
+  _STAI_SET_ERROR(net_ctx, (net_ctx->_flags & STAI_FLAG_ACTIVATIONS) != STAI_FLAG_ACTIVATIONS,
+        STAI_ERROR_NETWORK_INVALID_ACTIVATIONS_PTR, net_ctx->_return_code)
+
+  _STAI_SET_ERROR(net_ctx, (net_ctx->_flags & STAI_FLAG_INPUTS) != STAI_FLAG_INPUTS,
+                  STAI_ERROR_NETWORK_INVALID_IN_PTR, net_ctx->_return_code)
+  _STAI_SET_ERROR(net_ctx, (net_ctx->_flags & STAI_FLAG_OUTPUTS) != STAI_FLAG_OUTPUTS,
+                  STAI_ERROR_NETWORK_INVALID_OUT_PTR, net_ctx->_return_code)
+
+  _STAI_SET_ERROR(net_ctx, (net_ctx->_flags & STAI_FLAG_WEIGHTS) != STAI_FLAG_WEIGHTS,
+                  STAI_ERROR_NETWORK_INVALID_WEIGHTS_PTR, net_ctx->_return_code)
+
+
+  /* LITE_KERNEL_SECTION BEGIN input_1_Transpose */
+  {
+    
+  forward_lite_input_1_Transpose(net_ctx);
+  }
+  /* LITE_KERNEL_SECTION END input_1_Transpose */
+  /* LITE_KERNEL_SECTION BEGIN node_517 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[0] + 150528);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 102400);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[0] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[1] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 3;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 112;
+    const ai_u32 t_in_0_shape_h_const_u32 = 112;
+    const ai_u32 t_out_0_shape_w_const_u32 = 56;
+    const ai_u32 t_out_0_shape_h_const_u32 = 56;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 2;
+    const ai_u16 l_stride_0_const_u16 = 2;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(1, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(1, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_517 */
+  /* LITE_KERNEL_SECTION BEGIN node_339 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 102400);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 102400);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 401408;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[2] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(2, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(2, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_339 */
+  /* LITE_KERNEL_SECTION BEGIN node_520 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 102400);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 43520);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[3] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[4] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 56;
+    const ai_u32 t_in_0_shape_h_const_u32 = 56;
+    const ai_u32 t_out_0_shape_w_const_u32 = 56;
+    const ai_u32 t_out_0_shape_h_const_u32 = 56;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_size v_n_groups_const_size = 64;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(3, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32_group(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_W_const_u16, l_dilation_H_const_u16, v_n_groups_const_size);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(3, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_520 */
+  /* LITE_KERNEL_SECTION BEGIN node_343 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 43520);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 43520);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 401408;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[5] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(4, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(4, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_343 */
+  /* LITE_KERNEL_SECTION BEGIN node_523 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 43520);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 14848);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[6] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[7] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 56;
+    const ai_u32 t_in_0_shape_h_const_u32 = 56;
+    const ai_u32 t_out_0_shape_w_const_u32 = 56;
+    const ai_u32 t_out_0_shape_h_const_u32 = 56;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(5, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(5, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_523 */
+  /* LITE_KERNEL_SECTION BEGIN node_347 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 14848);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 14848);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 401408;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[8] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(6, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(6, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_347 */
+  /* LITE_KERNEL_SECTION BEGIN node_526 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 14848);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[9] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[10] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 56;
+    const ai_u32 t_in_0_shape_h_const_u32 = 56;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 2;
+    const ai_u16 l_stride_0_const_u16 = 2;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(7, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(128));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(7, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_526 */
+  /* LITE_KERNEL_SECTION BEGIN node_351 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 0);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 100352;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[11] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(8, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(8, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_351 */
+  /* LITE_KERNEL_SECTION BEGIN node_529 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[12] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[13] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 300544);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(9, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(9, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_529 */
+  /* LITE_KERNEL_SECTION BEGIN node_532 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[14] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[15] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(10, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(10, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_532 */
+  /* LITE_KERNEL_SECTION BEGIN node_357 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 100352;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[16] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(11, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(11, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_357 */
+  /* LITE_KERNEL_SECTION BEGIN node_535 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1306624);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[17] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[18] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(12, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(128));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(12, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_535 */
+  /* LITE_KERNEL_SECTION BEGIN node_361 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 1306624);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 100352;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[19] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(13, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(13, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_361 */
+  /* LITE_KERNEL_SECTION BEGIN node_538 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1306624);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[20] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[21] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(14, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(14, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_538 */
+  /* LITE_KERNEL_SECTION BEGIN node_364 */
+  {
+    
+  forward_lite_node_364(net_ctx);
+  }
+  /* LITE_KERNEL_SECTION END node_364 */
+  /* LITE_KERNEL_SECTION BEGIN node_541 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 802816);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[22] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[23] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(16, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(16, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_541 */
+  /* LITE_KERNEL_SECTION BEGIN node_368 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 802816);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 802816);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 100352;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[24] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(17, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(17, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_368 */
+  /* LITE_KERNEL_SECTION BEGIN node_544 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 802816);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[25] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[26] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(18, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(128));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(18, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_544 */
+  /* LITE_KERNEL_SECTION BEGIN node_372 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 802816);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 0);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 100352;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[27] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(19, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(19, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_372 */
+  /* LITE_KERNEL_SECTION BEGIN node_547 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 802816);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1306624);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[28] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[29] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(20, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(20, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_547 */
+  /* LITE_KERNEL_SECTION BEGIN node_375 */
+  {
+    
+  forward_lite_node_375(net_ctx);
+  }
+  /* LITE_KERNEL_SECTION END node_375 */
+  /* LITE_KERNEL_SECTION BEGIN node_550 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[30] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[31] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(22, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(22, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_550 */
+  /* LITE_KERNEL_SECTION BEGIN node_379 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 100352;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[32] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(23, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(23, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_379 */
+  /* LITE_KERNEL_SECTION BEGIN node_553 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1306624);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[33] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[34] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(24, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(128));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(24, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_553 */
+  /* LITE_KERNEL_SECTION BEGIN node_383 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 1306624);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 100352;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[35] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(25, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(25, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_383 */
+  /* LITE_KERNEL_SECTION BEGIN node_556 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1306624);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[36] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[37] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(26, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(26, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_556 */
+  /* LITE_KERNEL_SECTION BEGIN node_386 */
+  {
+    
+  forward_lite_node_386(net_ctx);
+  }
+  /* LITE_KERNEL_SECTION END node_386 */
+  /* LITE_KERNEL_SECTION BEGIN node_559 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 802816);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[38] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[39] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(28, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(28, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_559 */
+  /* LITE_KERNEL_SECTION BEGIN node_390 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 802816);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 802816);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 100352;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[40] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(29, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(29, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_390 */
+  /* LITE_KERNEL_SECTION BEGIN node_562 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 802816);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[41] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[42] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(30, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(128));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(30, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_562 */
+  /* LITE_KERNEL_SECTION BEGIN node_394 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 802816);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 0);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 100352;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[43] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(31, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(31, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_394 */
+  /* LITE_KERNEL_SECTION BEGIN node_565 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 802816);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1306624);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[44] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[45] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(32, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(32, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_565 */
+  /* LITE_KERNEL_SECTION BEGIN node_397 */
+  {
+    
+  forward_lite_node_397(net_ctx);
+  }
+  /* LITE_KERNEL_SECTION END node_397 */
+  /* LITE_KERNEL_SECTION BEGIN node_568 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 905216);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[46] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[47] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 150016);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 128;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 28;
+    const ai_u32 t_out_0_shape_h_const_u32 = 28;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(34, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(34, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_568 */
+  /* LITE_KERNEL_SECTION BEGIN node_401 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 905216);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 905216);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 200704;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[48] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(35, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(35, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_401 */
+  /* LITE_KERNEL_SECTION BEGIN node_571 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 905216);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 889856);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[49] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[50] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 28;
+    const ai_u32 t_in_0_shape_h_const_u32 = 28;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 2;
+    const ai_u16 l_stride_0_const_u16 = 2;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(36, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(256));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(36, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_571 */
+  /* LITE_KERNEL_SECTION BEGIN node_405 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 0);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 889856);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 50176;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[51] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(37, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(37, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_405 */
+  /* LITE_KERNEL_SECTION BEGIN node_574 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 200704);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[52] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[53] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 300032);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(38, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(38, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_574 */
+  /* LITE_KERNEL_SECTION BEGIN node_577 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 200704);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[54] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[55] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(39, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(39, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_577 */
+  /* LITE_KERNEL_SECTION BEGIN node_411 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 50176;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[56] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(40, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(40, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_411 */
+  /* LITE_KERNEL_SECTION BEGIN node_580 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[57] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[58] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(41, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(256));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(41, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_580 */
+  /* LITE_KERNEL_SECTION BEGIN node_415 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 0);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 50176;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[59] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(42, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(42, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_415 */
+  /* LITE_KERNEL_SECTION BEGIN node_583 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1507328);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[60] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[61] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(43, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(43, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_583 */
+  /* LITE_KERNEL_SECTION BEGIN node_418 */
+  {
+    
+  forward_lite_node_418(net_ctx);
+  }
+  /* LITE_KERNEL_SECTION END node_418 */
+  /* LITE_KERNEL_SECTION BEGIN node_586 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 200704);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[62] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[63] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(45, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(45, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_586 */
+  /* LITE_KERNEL_SECTION BEGIN node_422 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 200704);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 200704);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 50176;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[64] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(46, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(46, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_422 */
+  /* LITE_KERNEL_SECTION BEGIN node_589 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 200704);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1507328);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[65] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[66] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(47, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(256));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(47, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_589 */
+  /* LITE_KERNEL_SECTION BEGIN node_426 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 200704);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 1507328);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 50176;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[67] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(48, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(48, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_426 */
+  /* LITE_KERNEL_SECTION BEGIN node_592 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 200704);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1507328);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[68] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[69] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(49, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(49, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_592 */
+  /* LITE_KERNEL_SECTION BEGIN node_429 */
+  {
+    
+  forward_lite_node_429(net_ctx);
+  }
+  /* LITE_KERNEL_SECTION END node_429 */
+  /* LITE_KERNEL_SECTION BEGIN node_595 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 200704);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[70] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[71] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(51, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(51, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_595 */
+  /* LITE_KERNEL_SECTION BEGIN node_433 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 50176;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[72] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(52, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(52, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_433 */
+  /* LITE_KERNEL_SECTION BEGIN node_598 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[73] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[74] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(53, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(256));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(53, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_598 */
+  /* LITE_KERNEL_SECTION BEGIN node_437 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 0);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 50176;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[75] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(54, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(54, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_437 */
+  /* LITE_KERNEL_SECTION BEGIN node_601 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1507328);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[76] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[77] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(55, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(55, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_601 */
+  /* LITE_KERNEL_SECTION BEGIN node_440 */
+  {
+    
+  forward_lite_node_440(net_ctx);
+  }
+  /* LITE_KERNEL_SECTION END node_440 */
+  /* LITE_KERNEL_SECTION BEGIN node_604 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 200704);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[78] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[79] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(57, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(57, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_604 */
+  /* LITE_KERNEL_SECTION BEGIN node_444 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 200704);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 200704);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 50176;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[80] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(58, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(58, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_444 */
+  /* LITE_KERNEL_SECTION BEGIN node_607 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 200704);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1507328);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[81] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[82] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(59, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(256));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(59, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_607 */
+  /* LITE_KERNEL_SECTION BEGIN node_448 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 200704);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 1507328);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 50176;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[83] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(60, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(60, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_448 */
+  /* LITE_KERNEL_SECTION BEGIN node_610 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 200704);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1507328);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[84] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[85] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(61, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(61, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_610 */
+  /* LITE_KERNEL_SECTION BEGIN node_451 */
+  {
+    
+  forward_lite_node_451(net_ctx);
+  }
+  /* LITE_KERNEL_SECTION END node_451 */
+  /* LITE_KERNEL_SECTION BEGIN node_613 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 200704);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[86] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[87] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(63, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(63, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_613 */
+  /* LITE_KERNEL_SECTION BEGIN node_455 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 50176;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[88] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(64, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(64, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_455 */
+  /* LITE_KERNEL_SECTION BEGIN node_616 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[89] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[90] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(65, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(256));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(65, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_616 */
+  /* LITE_KERNEL_SECTION BEGIN node_459 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 0);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 50176;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[91] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(66, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(66, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_459 */
+  /* LITE_KERNEL_SECTION BEGIN node_619 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1507328);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[92] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[93] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(67, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(67, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_619 */
+  /* LITE_KERNEL_SECTION BEGIN node_462 */
+  {
+    
+  forward_lite_node_462(net_ctx);
+  }
+  /* LITE_KERNEL_SECTION END node_462 */
+  /* LITE_KERNEL_SECTION BEGIN node_622 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 200704);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[94] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[95] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(69, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(69, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_622 */
+  /* LITE_KERNEL_SECTION BEGIN node_466 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 200704);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 200704);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 50176;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[96] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(70, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(70, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_466 */
+  /* LITE_KERNEL_SECTION BEGIN node_625 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 200704);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1507328);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[97] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[98] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(71, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(256));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(71, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_625 */
+  /* LITE_KERNEL_SECTION BEGIN node_470 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 200704);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 1507328);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 50176;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[99] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(72, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(72, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_470 */
+  /* LITE_KERNEL_SECTION BEGIN node_628 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 200704);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 1507328);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[100] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[101] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(73, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(73, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_628 */
+  /* LITE_KERNEL_SECTION BEGIN node_473 */
+  {
+    
+  forward_lite_node_473(net_ctx);
+  }
+  /* LITE_KERNEL_SECTION END node_473 */
+  /* LITE_KERNEL_SECTION BEGIN node_631 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 200704);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[102] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[103] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 512;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 14;
+    const ai_u32 t_out_0_shape_h_const_u32 = 14;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(75, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(75, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_631 */
+  /* LITE_KERNEL_SECTION BEGIN node_477 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 401408);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 100352;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[104] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(76, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(76, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_477 */
+  /* LITE_KERNEL_SECTION BEGIN node_634 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[1] + 401408);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 50176);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[105] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[106] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 512;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 512;
+    const ai_u32 t_in_0_shape_w_const_u32 = 14;
+    const ai_u32 t_in_0_shape_h_const_u32 = 14;
+    const ai_u32 t_out_0_shape_w_const_u32 = 7;
+    const ai_u32 t_out_0_shape_h_const_u32 = 7;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 2;
+    const ai_u16 l_stride_0_const_u16 = 2;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(77, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(512));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(77, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_634 */
+  /* LITE_KERNEL_SECTION BEGIN node_481 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[0] + 50176);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[0] + 50176);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 25088;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[107] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(78, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(78, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_481 */
+  /* LITE_KERNEL_SECTION BEGIN node_637 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[0] + 50176);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[108] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[109] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 299008);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 512;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 7;
+    const ai_u32 t_in_0_shape_h_const_u32 = 7;
+    const ai_u32 t_out_0_shape_w_const_u32 = 7;
+    const ai_u32 t_out_0_shape_h_const_u32 = 7;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(79, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(79, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_637 */
+  /* LITE_KERNEL_SECTION BEGIN node_640 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 150528);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[110] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[111] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 149504);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 7;
+    const ai_u32 t_in_0_shape_h_const_u32 = 7;
+    const ai_u32 t_out_0_shape_w_const_u32 = 7;
+    const ai_u32 t_out_0_shape_h_const_u32 = 7;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(80, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(80, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_640 */
+  /* LITE_KERNEL_SECTION BEGIN node_487 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[0] + 50176);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[0] + 150528);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 12544;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[112] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(81, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(81, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_487 */
+  /* LITE_KERNEL_SECTION BEGIN node_643 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[0] + 50176);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[113] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[114] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 7;
+    const ai_u32 t_in_0_shape_h_const_u32 = 7;
+    const ai_u32 t_out_0_shape_w_const_u32 = 7;
+    const ai_u32 t_out_0_shape_h_const_u32 = 7;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(82, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(256));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(82, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_643 */
+  /* LITE_KERNEL_SECTION BEGIN node_491 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[0] + 50176);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 0);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 12544;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[115] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(83, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(83, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_491 */
+  /* LITE_KERNEL_SECTION BEGIN node_646 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[0] + 50176);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[116] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[117] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 100352);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 7;
+    const ai_u32 t_in_0_shape_h_const_u32 = 7;
+    const ai_u32 t_out_0_shape_w_const_u32 = 7;
+    const ai_u32 t_out_0_shape_h_const_u32 = 7;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(84, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(84, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_646 */
+  /* LITE_KERNEL_SECTION BEGIN node_494 */
+  {
+    
+  forward_lite_node_494(net_ctx);
+  }
+  /* LITE_KERNEL_SECTION END node_494 */
+  /* LITE_KERNEL_SECTION BEGIN node_649 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[0] + 50176);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[118] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[119] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 149504);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 7;
+    const ai_u32 t_in_0_shape_h_const_u32 = 7;
+    const ai_u32 t_out_0_shape_w_const_u32 = 7;
+    const ai_u32 t_out_0_shape_h_const_u32 = 7;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(86, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(86, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_649 */
+  /* LITE_KERNEL_SECTION BEGIN node_498 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[0] + 150528);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 0);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 12544;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[120] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(87, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(87, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_498 */
+  /* LITE_KERNEL_SECTION BEGIN node_652 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[0] + 150528);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 200704);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[121] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[122] + 0);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 7;
+    const ai_u32 t_in_0_shape_h_const_u32 = 7;
+    const ai_u32 t_out_0_shape_w_const_u32 = 7;
+    const ai_u32 t_out_0_shape_h_const_u32 = 7;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 3;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 3;
+    const ai_i32 l_pad_W_0_const_s32 = 1;
+    const ai_i32 l_pad_H_0_const_s32 = 1;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(88, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_dw_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 3, 3, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(256));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(88, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_652 */
+  /* LITE_KERNEL_SECTION BEGIN node_502 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[0] + 0);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[0] + 200704);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 12544;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[123] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(89, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(89, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_502 */
+  /* LITE_KERNEL_SECTION BEGIN node_655 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[124] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[125] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 100352);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_in_0_shape_w_const_u32 = 7;
+    const ai_u32 t_in_0_shape_h_const_u32 = 7;
+    const ai_u32 t_out_0_shape_w_const_u32 = 7;
+    const ai_u32 t_out_0_shape_h_const_u32 = 7;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(90, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(90, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_655 */
+  /* LITE_KERNEL_SECTION BEGIN node_505 */
+  {
+    
+  forward_lite_node_505(net_ctx);
+  }
+  /* LITE_KERNEL_SECTION END node_505 */
+  /* LITE_KERNEL_SECTION BEGIN node_658 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[1] + 0);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[126] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[127] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 50176);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 256;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 512;
+    const ai_u32 t_in_0_shape_w_const_u32 = 7;
+    const ai_u32 t_in_0_shape_h_const_u32 = 7;
+    const ai_u32 t_out_0_shape_w_const_u32 = 7;
+    const ai_u32 t_out_0_shape_h_const_u32 = 7;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(92, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(92, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_658 */
+  /* LITE_KERNEL_SECTION BEGIN node_509 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[0] + 0);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[1] + 0);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 25088;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[128] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(93, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(93, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_509 */
+  /* LITE_KERNEL_SECTION BEGIN node_661 */
+  {
+      const ai_float* t_in_0_ptr_const_f32 = (ai_float*)(net_ctx->_activations[0] + 0);
+    ai_float* t_out_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 150528);
+    const ai_u8* t_weight_0_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[129] + 0);
+    const ai_u8* t_weight_1_ptr_const_u8 = (ai_u8*)(net_ctx->_weights[130] + 0);
+    ai_float* t_scratch_0_ptr_f32 = (ai_float*)(net_ctx->_activations[0] + 148480);
+    const ai_u32 t_in_0_shape_ch_const_u32 = 512;
+    const ai_u32 t_out_0_shape_ch_const_u32 = 64;
+    const ai_u32 t_in_0_shape_w_const_u32 = 7;
+    const ai_u32 t_in_0_shape_h_const_u32 = 7;
+    const ai_u32 t_out_0_shape_w_const_u32 = 7;
+    const ai_u32 t_out_0_shape_h_const_u32 = 7;
+    const ai_u32 t_weight_0_shape_w_const_u32 = 1;
+    const ai_u32 t_weight_0_shape_h_const_u32 = 1;
+    const ai_i32 l_pad_W_0_const_s32 = 0;
+    const ai_i32 l_pad_H_0_const_s32 = 0;
+    const ai_u16 l_stride_1_const_u16 = 1;
+    const ai_u16 l_stride_0_const_u16 = 1;
+    const ai_u16 l_dilation_H_const_u16 = 1;
+    const ai_u16 l_dilation_W_const_u16 = 1;
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(94, 1, {(stai_ptr) t_in_0_ptr_const_f32});
+    
+  forward_lite_conv2d_if32of32wf32(t_in_0_ptr_const_f32, t_out_0_ptr_f32, t_weight_0_ptr_const_u8, t_weight_1_ptr_const_u8, t_scratch_0_ptr_f32, t_in_0_shape_ch_const_u32, t_out_0_shape_ch_const_u32, t_in_0_shape_w_const_u32, t_in_0_shape_h_const_u32, t_out_0_shape_w_const_u32, t_out_0_shape_h_const_u32, t_weight_0_shape_w_const_u32, t_weight_0_shape_h_const_u32, l_pad_W_0_const_s32, l_pad_H_0_const_s32, l_stride_1_const_u16, l_stride_0_const_u16, 1, 1, l_dilation_H_const_u16, l_dilation_W_const_u16, (ai_size)(1));
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(94, 1, {(stai_ptr) t_out_0_ptr_f32});
+  }
+  /* LITE_KERNEL_SECTION END node_661 */
+  /* LITE_KERNEL_SECTION BEGIN node_513 */
+  {
+      ai_handle t_out_0_ptr_handle = (ai_handle)(net_ctx->_activations[0] + 0);
+    const ai_handle t_in_0_ptr_const_handle = (ai_handle)(net_ctx->_activations[0] + 150528);
+    const ai_i32 t_in_0_shape_ch_h_w_prod_const_s32 = 3136;
+    const ai_handle t_weight_0_ptr_const_handle = (ai_handle)(net_ctx->_weights[131] + 0);
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(95, 1, {(stai_ptr) t_in_0_ptr_const_handle});
+    
+  forward_lite_nl_prelu_if32of32(t_out_0_ptr_handle, t_in_0_ptr_const_handle, t_in_0_shape_ch_h_w_prod_const_s32, t_weight_0_ptr_const_handle);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(95, 1, {(stai_ptr) t_out_0_ptr_handle});
+  }
+  /* LITE_KERNEL_SECTION END node_513 */
+  /* LITE_KERNEL_SECTION BEGIN node_514_to_chlast */
+  {
+    
+  forward_lite_node_514_to_chlast(net_ctx);
+  }
+  /* LITE_KERNEL_SECTION END node_514_to_chlast */
+  /* LITE_KERNEL_SECTION BEGIN node_515 */
+  {
+      forward_lite_dense_if32of32wf32_args arg_30f51e = {
+      .output = (float*)(net_ctx->_outputs[0] + 0),
+      .input = (float*)(net_ctx->_activations[0] + 288512),
+      .weights = (float*)(net_ctx->_weights[132] + 0),
+      .bias = (float*)(net_ctx->_weights[133] + 0),
+      .n_channel_in = 3136,
+      .n_channel_out = 512,
+      .n_elements = 1,
+    };
+  
+  _STAI_NETWORK_EVENT_NODE_START_CB(98, 1, {(stai_ptr) (float*)(net_ctx->_activations[0] + 288512)});
+    
+  forward_lite_dense_if32of32wf32((forward_lite_dense_if32of32wf32_args*)&arg_30f51e);
+    
+  _STAI_NETWORK_EVENT_NODE_STOP_CB(98, 1, {(stai_ptr) (float*)(net_ctx->_outputs[0] + 0)});
+  }
+  /* LITE_KERNEL_SECTION END node_515 */
+  return net_ctx->_return_code;
+}
+
+/*****************************************************************************/
+/*  Getters APIs Section  */
+STAI_API_ENTRY
+stai_size stai_network_get_context_size()
+{
+  return (stai_size)STAI_NETWORK_CONTEXT_SIZE;
+}
+
+#if defined(HAVE_NETWORK_INFO)
+STAI_API_ENTRY
+stai_return_code stai_network_get_info(
+  stai_network* network,
+  stai_network_info* info)
+{
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+  _STAI_SET_ERROR(net_ctx, info==NULL, STAI_ERROR_NETWORK_INVALID_INFO, net_ctx->_return_code)
+
+  // Copy of network info struct
+  *info = g_network_info;
+
+  return STAI_SUCCESS;
+}
+#endif
+
+
+STAI_API_ENTRY
+stai_return_code stai_network_get_activations(
+  stai_network* network, stai_ptr* activations, stai_size* n_activations)
+{
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+
+  _STAI_SET_ERROR(net_ctx, !n_activations, STAI_ERROR_NETWORK_INVALID_API_ARGUMENTS, net_ctx->_return_code)
+  *n_activations = STAI_NETWORK_ACTIVATIONS_NUM;
+for (stai_size idx=0; activations && (idx<STAI_NETWORK_ACTIVATIONS_NUM); idx++) {
+    // get address of the activations buffers
+    activations[idx] = net_ctx->_activations[idx];
+  }return net_ctx->_return_code;
+}
+
+
+STAI_API_ENTRY
+stai_return_code stai_network_get_weights(
+  stai_network* network, stai_ptr* weights, stai_size* n_weights)
+{
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+  _STAI_SET_ERROR(net_ctx, !n_weights, STAI_ERROR_NETWORK_INVALID_API_ARGUMENTS, net_ctx->_return_code)
+  *n_weights = STAI_NETWORK_WEIGHTS_NUM;
+for (stai_size idx=0; weights && (idx<STAI_NETWORK_WEIGHTS_NUM); idx++) {
+    // get address of the weights buffers
+    weights[idx] = net_ctx->_weights[idx];
+  }return net_ctx->_return_code;
+}
+
+
+STAI_API_ENTRY
+stai_return_code stai_network_get_inputs(
+  stai_network* network, stai_ptr* inputs, stai_size* n_inputs)
+{
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+  _STAI_SET_ERROR(net_ctx, !n_inputs, STAI_ERROR_NETWORK_INVALID_API_ARGUMENTS, net_ctx->_return_code)
+  *n_inputs = STAI_NETWORK_IN_NUM;
+  for (stai_size idx=0; inputs && (idx<STAI_NETWORK_IN_NUM); idx++) {
+    inputs[idx] = net_ctx->_inputs[idx];
+  }
+  return net_ctx->_return_code;
+}
+
+
+STAI_API_ENTRY
+stai_return_code stai_network_get_outputs(
+  stai_network* network, stai_ptr* outputs, stai_size* n_outputs)
+{
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+  _STAI_SET_ERROR(net_ctx, !n_outputs, STAI_ERROR_NETWORK_INVALID_API_ARGUMENTS, net_ctx->_return_code)
+  *n_outputs = STAI_NETWORK_OUT_NUM;
+  for (stai_size idx=0; outputs && (idx<STAI_NETWORK_OUT_NUM); idx++) {
+    outputs[idx] = net_ctx->_outputs[idx];
+  }
+  return net_ctx->_return_code;
+}
+
+
+STAI_API_ENTRY
+stai_return_code stai_network_get_error(
+  stai_network* network)
+{
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+
+  /* return 1st generated error or STAI_SUCCESS if no errors so far */
+  return net_ctx->_return_code;
+}
+
+
+STAI_API_ENTRY
+stai_return_code stai_network_get_states(
+  stai_network* network, stai_ptr* states, stai_size* n_states)
+{
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+  _STAI_SET_ERROR(net_ctx, !n_states, STAI_ERROR_NETWORK_INVALID_API_ARGUMENTS, net_ctx->_return_code)
+  /* get the number of internals states (supporting multi-heap also for internal states) */
+  *n_states = STAI_NETWORK_STATES_NUM;
+
+  STAI_UNUSED(states)
+return net_ctx->_return_code;
+}
+
+
+/*****************************************************************************/
+/*  Setters APIs Section  */
+
+STAI_API_ENTRY
+stai_return_code stai_network_set_activations(
+  stai_network* network,
+  const stai_ptr* activations,
+  const stai_size n_activations)
+{
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+const uintptr_t _activations_alignment[] = STAI_NETWORK_ACTIVATIONS_ALIGNMENTS;
+  STAI_PRINT("  [stai_network_set_activations] network(%p) activations[%d]: %p\n\n", net_ctx, n_activations, activations)
+  _STAI_SET_ERROR(net_ctx, !activations,
+                  STAI_ERROR_NETWORK_INVALID_API_ARGUMENTS, net_ctx->_return_code)
+  _STAI_SET_ERROR(net_ctx, n_activations!=STAI_NETWORK_ACTIVATIONS_NUM,
+                  STAI_ERROR_NETWORK_INVALID_ACTIVATIONS_NUM, net_ctx->_return_code)
+
+  for (stai_size idx=0; activations && idx<STAI_NETWORK_ACTIVATIONS_NUM; idx++) {
+    STAI_PRINT("  activation[%d]: %p\n", idx, activations[idx])
+    _STAI_SET_ERROR(net_ctx, activations[idx]==NULL,
+                    STAI_ERROR_NETWORK_INVALID_ACTIVATIONS_PTR, net_ctx->_return_code)
+    _STAI_SET_ERROR(net_ctx, ((uintptr_t)activations[idx]) & (_activations_alignment[idx]-1),
+                    STAI_ERROR_INVALID_BUFFER_ALIGNMENT, net_ctx->_return_code)
+    net_ctx->_activations[idx] = activations[idx];
+  }
+  net_ctx->_inputs[0] = activations[0] + 0;
+
+  net_ctx->_outputs[0] = activations[0] + 0;
+_stai_network_check(net_ctx);
+  return net_ctx->_return_code;
+}
+
+
+STAI_API_ENTRY
+stai_return_code stai_network_set_weights(
+  stai_network* network,
+  const stai_ptr* weights,
+  const stai_size n_weights)
+{
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+const uintptr_t _weights_alignment[] = STAI_NETWORK_WEIGHTS_ALIGNMENTS;
+  _STAI_SET_ERROR(net_ctx, !weights,
+                  STAI_ERROR_NETWORK_INVALID_API_ARGUMENTS, net_ctx->_return_code)
+  _STAI_SET_ERROR(net_ctx, n_weights!=STAI_NETWORK_WEIGHTS_NUM,
+                  STAI_ERROR_NETWORK_INVALID_WEIGHTS_NUM, net_ctx->_return_code)
+  for (stai_size idx=0; weights && idx<STAI_NETWORK_WEIGHTS_NUM; idx++) {
+    STAI_PRINT("  weight[%d]: %p\n", idx, weights[idx])
+    _STAI_SET_ERROR(net_ctx, weights[idx]==NULL,
+                    STAI_ERROR_NETWORK_INVALID_WEIGHTS_PTR, net_ctx->_return_code)
+    _STAI_SET_ERROR(net_ctx, ((uintptr_t)weights[idx]) & (_weights_alignment[idx]-1),
+                    STAI_ERROR_INVALID_BUFFER_ALIGNMENT, net_ctx->_return_code)
+    net_ctx->_weights[idx] = weights[idx];
+  }_stai_network_check(net_ctx);
+  return net_ctx->_return_code;
+}
+
+
+STAI_API_ENTRY
+stai_return_code stai_network_set_inputs(
+  stai_network* network,
+  const stai_ptr* inputs,
+  const stai_size n_inputs)
+{
+  const uintptr_t _inputs_alignment[] = STAI_NETWORK_IN_ALIGNMENTS;
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+  _STAI_SET_ERROR(net_ctx, !inputs,
+                  STAI_ERROR_NETWORK_INVALID_API_ARGUMENTS, net_ctx->_return_code)
+  _STAI_SET_ERROR(net_ctx, n_inputs!=STAI_NETWORK_IN_NUM,
+                  STAI_ERROR_NETWORK_INVALID_IN_NUM, net_ctx->_return_code)
+
+  for (stai_size idx=0; inputs && idx<STAI_NETWORK_IN_NUM; idx++) {
+    STAI_PRINT("  input[%d]: %p\n", idx, inputs[idx])
+    _STAI_SET_ERROR(net_ctx, inputs[idx]==NULL,
+                    STAI_ERROR_NETWORK_INVALID_IN_PTR, net_ctx->_return_code)
+    _STAI_SET_ERROR(net_ctx, ((uintptr_t)inputs[idx]) & (_inputs_alignment[idx]-1),
+                    STAI_ERROR_INVALID_BUFFER_ALIGNMENT, net_ctx->_return_code)
+    net_ctx->_inputs[idx] = inputs[idx];
+  }
+
+  _stai_network_check(net_ctx);
+  return net_ctx->_return_code;
+}
+
+
+STAI_API_ENTRY
+stai_return_code stai_network_set_outputs(
+  stai_network* network,
+  const stai_ptr* outputs,
+  const stai_size n_outputs)
+{
+  const uintptr_t _outputs_alignment[] = STAI_NETWORK_OUT_ALIGNMENTS;
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+  _STAI_SET_ERROR(net_ctx, !outputs,
+                  STAI_ERROR_NETWORK_INVALID_API_ARGUMENTS, net_ctx->_return_code)
+  _STAI_SET_ERROR(net_ctx, n_outputs!=STAI_NETWORK_OUT_NUM,
+                  STAI_ERROR_NETWORK_INVALID_OUT_NUM, net_ctx->_return_code)
+
+  for (stai_size idx=0; outputs && idx<n_outputs; idx++) {
+    STAI_PRINT("  output[%d]: %p\n", idx, outputs[idx])
+    _STAI_SET_ERROR(net_ctx, outputs[idx]==NULL,
+                    STAI_ERROR_NETWORK_INVALID_OUT_PTR, net_ctx->_return_code)
+    _STAI_SET_ERROR(net_ctx, ((uintptr_t)outputs[idx]) & (_outputs_alignment[idx]-1),
+                    STAI_ERROR_INVALID_BUFFER_ALIGNMENT, net_ctx->_return_code)
+    net_ctx->_outputs[idx] = outputs[idx];
+  }
+
+  _stai_network_check(net_ctx);
+  return net_ctx->_return_code;
+}
+
+
+STAI_API_ENTRY
+stai_return_code stai_network_set_states(
+  stai_network* network,
+  const stai_ptr* states,
+  const stai_size n_states)
+{
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+
+  STAI_UNUSED(states)
+  STAI_UNUSED(n_states)
+_stai_network_check(net_ctx);
+  return net_ctx->_return_code;
+}
+
+STAI_API_ENTRY
+stai_return_code stai_network_set_callback(
+  stai_network* network, const stai_event_cb cb, void* cb_cookie)
+{
+  _STAI_CONTEXT_ACQUIRE(net_ctx, network)
+  STAI_PRINT("  set_callback %p cb %p cookie %p\n", net_ctx, cb, cb_cookie)
+  // _STAI_SET_ERROR(net_ctx, cb==NULL, STAI_ERROR_NETWORK_INVALID_CALLBACK, net_ctx->_return_code)
+  net_ctx->_callback = cb;
+  net_ctx->_callback_cookie = cb_cookie;
+  return net_ctx->_return_code;
+}
+
+#undef _STAI_SET_ERROR
+#undef _STAI_CONTEXT_ALIGNMENT
+#undef _STAI_CONTEXT_ACQUIRE
+#undef _STAI_NETWORK_EVENT_NODE_START_CB
+#undef _STAI_NETWORK_EVENT_NODE_STOP_CB
+#undef _STAI_NETWORK_MODEL_SIGNATURE
+#undef _STAI_NETWORK_DATETIME
+#undef _STAI_NETWORK_COMPILE_DATETIME
+

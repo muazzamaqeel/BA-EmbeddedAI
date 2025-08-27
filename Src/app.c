@@ -19,6 +19,8 @@
 #include "app.h"
 #include <inttypes.h>
 #include "network.h"
+#include "face_recognition.h"
+
 #include "stm32n6570_discovery_xspi.h"
 #include <math.h>
 #include <stdint.h>
