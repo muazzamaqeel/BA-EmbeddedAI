@@ -130,6 +130,7 @@
 									<listOptionValue builtIn="false" value="../../../Lib/FreeRTOS/Source/portable/GCC/ARM_CM55_NTZ/non_secure"/>
 									<listOptionValue builtIn="false" value="../../../Lib/screenl/Inc"/>
 									<listOptionValue builtIn="false" value="../../../Lib/tracker"/>
+									<listOptionValue builtIn="false" value="../../../Model/FaceRec/facerec_out"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.otherflags.315856049" name="Other flags" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.otherflags" useByScannerDiscovery="true" valueType="stringList">
 									<listOptionValue builtIn="false" value=""/>

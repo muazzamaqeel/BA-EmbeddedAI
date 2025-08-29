@@ -37,7 +37,6 @@
 #include "stm32n6xx_hal_rif.h"
 #include "FreeRTOS.h"
 #include "task.h"
-
 UART_HandleTypeDef huart1;
 
 static StaticTask_t main_thread;

@@ -44,6 +44,7 @@
 #include "tracker.h"
 #endif
 #include "utils.h"
+#include "facerec.h"
 
 #define FREERTOS_PRIORITY(p) ((UBaseType_t)((int)tskIDLE_PRIORITY + configMAX_PRIORITIES / 2 + (p)))
 
