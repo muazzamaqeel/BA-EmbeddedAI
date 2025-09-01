@@ -1,6 +1,11 @@
 #define MY_NAME "Muazzam"
+#define FR_SUBJECT_NAME MY_NAME   // <— add this so logs say “Muazzam”, not “ME”
 #include "npu_guard.h"
 #include "fr_helpers.h"
+
+
+/* FaceRec dedicated user IO (non-aliased, PSRAM) */
+
 
 /**
  ******************************************************************************
@@ -49,6 +54,11 @@
 #endif
 #include "utils.h"
 #include "face_recognition.h"
+
+/* FaceRec dedicated user IO (non-aliased, PSRAM) — put qualifiers AFTER the var */
+static float  g_fr_in_user [FR_IN_W * FR_IN_H * 3] ALIGN_32 IN_PSRAM;
+static int8_t g_fr_out_user[FR_EMB_SIZE]           ALIGN_32 IN_PSRAM;
+
 
 #define FREERTOS_PRIORITY(p) ((UBaseType_t)((int)tskIDLE_PRIORITY + configMAX_PRIORITIES / 2 + (p)))
 
@@ -774,56 +784,51 @@ static void nn_thread_fct(void *arg)
     {
       const uint8_t *src = capture_buffer;
 
-#if NN_LOG_INPUT_STATS
+    #if NN_LOG_INPUT_STATS
       float mn =  1e30f, mx = -1e30f, sum = 0.f; int cnt = 0;
-#endif
+    #endif
 
-#if PACK_AS_NCHW
+    #if PACK_AS_NCHW
       float *dstR = aton_in + 0 * PIX;
       float *dstG = aton_in + 1 * PIX;
       float *dstB = aton_in + 2 * PIX;
-      for (int i = 0; i < PIX; ++i) {
+      for (int i = 0; i < PIX; ++i)
+      {
         float r = (float)(*src++), g = (float)(*src++), b = (float)(*src++);
-#if INPUT_IS_BGR
+    #if INPUT_IS_BGR
         float t = r; r = b; b = t;
-#endif
+    #endif
         r = r * scale + bias; g = g * scale + bias; b = b * scale + bias;
         dstR[i] = r; dstG[i] = g; dstB[i] = b;
-#if NN_LOG_INPUT_STATS
+
+    #if NN_LOG_INPUT_STATS
         if ((HAL_GetTick() - last_inp_print) >= 1000U && ((i & 0x3F) == 0)) {
-          if (r < mn) mn = r; if (r > mx) mx = r; sum += r; cnt++;
-          if (g < mn) mn = g; if (g > mx) mx = g; sum += g; cnt++;
-          if (b < mn) mn = b; if (b > mx) mx = b; sum += b; cnt++;
+          mn = fminf(mn, r); mx = fmaxf(mx, r); sum += r; cnt++;
+          mn = fminf(mn, g); mx = fmaxf(mx, g); sum += g; cnt++;
+          mn = fminf(mn, b); mx = fmaxf(mx, b); sum += b; cnt++;
         }
-#endif
+    #endif
       }
-#else
+    #else
       float *dst = aton_in;
-      for (int i = 0; i < PIX; ++i) {
+      for (int i = 0; i < PIX; ++i)
+      {
         float r = (float)(*src++), g = (float)(*src++), b = (float)(*src++);
-#if INPUT_IS_BGR
+    #if INPUT_IS_BGR
         float t = r; r = b; b = t;
-#endif
+    #endif
         r = r * scale + bias; g = g * scale + bias; b = b * scale + bias;
         *dst++ = r; *dst++ = g; *dst++ = b;
-#if NN_LOG_INPUT_STATS
-        if ((HAL_GetTick() - last_inp_print) >= 1000U && ((i & 0x3F) == 0)) {
-          if (r < mn) mn = r; if (r > mx) mx = r; sum += r; cnt++;
-          if (g < mn) mn = g; if (g > mx) mx = g; sum += g; cnt++;
-          if (b < mn) mn = b; if (b > mx) mx = b; sum += b; cnt++;
-        }
-#endif
-      }
-#endif /* PACK_AS_NCHW */
 
-#if NN_ONE_SHOT_SYNTH_TEST
-      if (!did_synth) {
-        int n = (int)(aton_in_len / (int)sizeof(float));
-        for (int k = 0; k < n; ++k) aton_in[k] = 0.5f;
-        did_synth = 1;
-        printf("[NN] one-shot synthetic input (all 0.5f) injected\r\n");
+    #if NN_LOG_INPUT_STATS
+        if ((HAL_GetTick() - last_inp_print) >= 1000U && ((i & 0x3F) == 0)) {
+          mn = fminf(mn, r); mx = fmaxf(mx, r); sum += r; cnt++;
+          mn = fminf(mn, g); mx = fmaxf(mx, g); sum += g; cnt++;
+          mn = fminf(mn, b); mx = fmaxf(mx, b); sum += b; cnt++;
+        }
+    #endif
       }
-#endif
+    #endif /* PACK_AS_NCHW */
 
       /* cache clean: CPU wrote input, NPU will read it */
       DCACHE_Clean(aton_in, aton_in_len);
@@ -831,15 +836,16 @@ static void nn_thread_fct(void *arg)
       /* publish detector input snapshot to FR module */
       fr_update_frame_snapshot(aton_in, aton_in_len);
 
-#if NN_LOG_INPUT_STATS
+    #if NN_LOG_INPUT_STATS
       if ((HAL_GetTick() - last_inp_print) >= 1000U) {
         float mean = (cnt > 0) ? (sum / (float)cnt) : 0.f;
         printf("[NN] input stats: min=%.3f max=%.3f mean=%.3f  [%s, %s]\r\n",
                mn, mx, mean, INPUT_IS_BGR ? "BGR" : "RGB", PACK_AS_NCHW ? "NCHW" : "NHWC");
         last_inp_print = HAL_GetTick();
       }
-#endif
+    #endif
     }
+
 
     /* -------- prepare outputs for NPU write -------- */
     {
@@ -883,15 +889,15 @@ static void nn_thread_fct(void *arg)
 static int TRK_Init()
 {
   const trk_conf_t cfg = {
-    .track_thresh = 0.25,
-    .det_thresh = 0.8,
-    .sim1_thresh = 0.8,
-    .sim2_thresh = 0.5,
-    .tlost_cnt = 30,
+    .track_thresh = 0.25f,
+    .det_thresh   = 0.60f,  /* was 0.80f; your det conf ~0.62–0.78 */
+    .sim1_thresh  = 0.80f,
+    .sim2_thresh  = 0.50f,
+    .tlost_cnt    = 30,
   };
-
-  return trk_init(&trk_ctx, (trk_conf_t *) &cfg, ARRAY_NB(tboxes), tboxes);
+  return trk_init(&trk_ctx, (trk_conf_t *)&cfg, ARRAY_NB(tboxes), tboxes);
 }
+#endif
 
 static int update_and_capture_tracking_enabled()
 {
@@ -915,48 +921,103 @@ static int update_and_capture_tracking_enabled()
   return tracking_enabled;
 }
 
-static void roi_to_dbox(od_pp_outBuffer_t *roi, trk_dbox_t *dbox)
+
+
+
+
+static inline float clamp01f(float v){ return (v < 0.f) ? 0.f : (v > 1.f ? 1.f : v); }
+
+#ifdef TRACKER_MODULE
+static int roi_to_dbox_safe(const od_pp_outBuffer_t *roi, trk_dbox_t *dbox)
 {
-  dbox->conf = roi->conf;
-  dbox->cx = roi->x_center;
-  dbox->cy = roi->y_center;
-  dbox->w = roi->width;
-  dbox->h = roi->height;
-}
+  if (!roi || !dbox) return 0;
+  if (!isfinite(roi->x_center) || !isfinite(roi->y_center) ||
+      !isfinite(roi->width)    || !isfinite(roi->height)   ||
+      !isfinite(roi->conf)) return 0;
 
-static int app_tracking(od_pp_out_t *pp)
-{
-  int tracking_enabled = update_and_capture_tracking_enabled();
-  int ret;
-  int i;
+  /* center/size -> corners */
+  float cx = clamp01f(roi->x_center);
+  float cy = clamp01f(roi->y_center);
+  float w  = fmaxf(roi->width ,  1e-4f);
+  float h  = fmaxf(roi->height,  1e-4f);
+  float x0 = cx - 0.5f*w, y0 = cy - 0.5f*h;
+  float x1 = cx + 0.5f*w, y1 = cy + 0.5f*h;
 
-  if (!tracking_enabled)
-    return 0;
+  /* clip to [0,1] */
+  x0 = fmaxf(0.f, x0); y0 = fmaxf(0.f, y0);
+  x1 = fminf(1.f, x1); y1 = fminf(1.f, y1);
 
-  for (i = 0; i < pp->nb_detect; i++)
-    roi_to_dbox(&pp->pOutBuff[i], &dboxes[i]);
+  /* re-derive center/size (guaranteed positive) */
+  w  = fmaxf(1e-4f, x1 - x0);
+  h  = fmaxf(1e-4f, y1 - y0);
+  cx = 0.5f * (x0 + x1);
+  cy = 0.5f * (y0 + y1);
 
-  ret = trk_update(&trk_ctx, pp->nb_detect, dboxes);
-  assert(ret == 0);
-
+  dbox->conf = clamp01f(roi->conf);
+  dbox->cx   = cx;
+  dbox->cy   = cy;
+  dbox->w    = w;
+  dbox->h    = h;
   return 1;
-}
-
-static void tbox_to_tbox_info(trk_tbox_t *tbox, tbox_info *tinfo)
-{
-  tinfo->cx = tbox->cx;
-  tinfo->cy = tbox->cy;
-  tinfo->w = tbox->w;
-  tinfo->h = tbox->h;
-  tinfo->id = tbox->id;
-}
-#else
-static int app_tracking(od_pp_out_t *pp)
-{
-  return 0;
 }
 #endif
 
+
+
+
+
+
+
+
+#ifdef TRACKER_MODULE
+static int app_tracking(od_pp_out_t *pp)
+{
+  int tracking_enabled = update_and_capture_tracking_enabled();
+  if (!tracking_enabled) return 0;
+
+  /* Gate: accept only confident, reasonable faces */
+  const float TRK_CONF_MIN   = 0.60f;   /* same as TRK_Init det_thresh */
+  const float TRK_SIDE_MIN   = 0.20f;   /* min normalized side */
+  const float TRK_CENTER_TOL = 0.60f;   /* ignore far-corner ghosts */
+
+  int n_in  = (int)pp->nb_detect;
+  if (n_in <= 0) return 1;
+
+  /* Optional: feed only the best detection to the tracker */
+  int best_idx = -1;
+  float best_score = -1.f;
+  for (int i = 0; i < n_in; ++i) {
+    const od_pp_outBuffer_t *d = &pp->pOutBuff[i];
+    float side = fmaxf(d->width, d->height);
+    float dx = fabsf(d->x_center - 0.5f), dy = fabsf(d->y_center - 0.5f);
+    float r_center = sqrtf(dx*dx + dy*dy);
+    if (d->conf < TRK_CONF_MIN || side < TRK_SIDE_MIN || r_center > TRK_CENTER_TOL)
+      continue;
+
+    float s_size   = fminf(1.f, side / 0.35f);
+    float s_center = 1.f - fminf(1.f, r_center / 0.6f);
+    float score = d->conf * (0.25f + 0.75f * s_size) * s_center;
+    if (score > best_score) { best_score = score; best_idx = i; }
+  }
+
+  int used = 0;
+  if (best_idx >= 0) {
+    if (roi_to_dbox_safe(&pp->pOutBuff[best_idx], &dboxes[0])) used = 1;
+  }
+
+  /* If nothing passed the gates, do not call the tracker this frame */
+  if (used == 0) return 1;
+
+  int ret = trk_update(&trk_ctx, used, dboxes);
+  if (ret != 0) {
+    printf("[TRK][ERR] update failed (%d) — reinit\n", ret);
+    TRK_Init();
+  }
+  return 1;
+}
+#else
+static int app_tracking(od_pp_out_t *pp) { (void)pp; return 0; }
+#endif
 
 
 
@@ -1130,9 +1191,34 @@ static void crop_to_facerec_input_from_detector_input(
 }
 
 
+#ifdef TRACKER_MODULE
+static void tbox_to_tbox_info(const trk_tbox_t *tbox, tbox_info *tinfo)
+{
+  tinfo->cx = tbox->cx; tinfo->cy = tbox->cy;
+  tinfo->w  = tbox->w;  tinfo->h  = tbox->h;
+  tinfo->id = tbox->id;
+}
+#endif
 
 
 
+
+
+static inline float iou_norm_boxes(const od_pp_outBuffer_t *a, const od_pp_outBuffer_t *b)
+{
+  float ax0 = a->x_center - a->width*0.5f,  ay0 = a->y_center - a->height*0.5f;
+  float ax1 = a->x_center + a->width*0.5f,  ay1 = a->y_center + a->height*0.5f;
+  float bx0 = b->x_center - b->width*0.5f,  by0 = b->y_center - b->height*0.5f;
+  float bx1 = b->x_center + b->width*0.5f,  by1 = b->y_center + b->height*0.5f;
+  float ix0 = fmaxf(ax0, bx0), iy0 = fmaxf(ay0, by0);
+  float ix1 = fminf(ax1, bx1), iy1 = fminf(ay1, by1);
+  float iw = fmaxf(0.f, ix1 - ix0), ih = fmaxf(0.f, iy1 - iy0);
+  float inter = iw * ih;
+  float aarea = fmaxf(0.f, ax1-ax0) * fmaxf(0.f, ay1-ay0);
+  float barea = fmaxf(0.f, bx1-bx0) * fmaxf(0.f, by1-by0);
+  float uni = aarea + barea - inter + 1e-6f;
+  return inter / uni;
+}
 
 static void pp_thread_fct(void *arg)
 {
@@ -1167,7 +1253,7 @@ static void pp_thread_fct(void *arg)
   od_pp_out_t pp_output;
   int tracking_enabled;
   uint32_t nn_pp[2];
-  int ret, i;
+  int ret;
 
 #if POSTPROCESS_TYPE == POSTPROCESS_CUSTOM
   app_postprocess_init(NULL);
@@ -1175,42 +1261,31 @@ static void pp_thread_fct(void *arg)
   app_postprocess_init(&pp_params);
 #endif
 
-  const uint32_t PRINT_BLOB_EVERY_MS   = 500;
+  const uint32_t PRINT_BLOB_EVERY_MS   = 600;
   const uint32_t PRINT_RESULT_EVERY_MS = 250;
   uint32_t last_blob_print   = 0;
   uint32_t last_result_print = 0;
 
-  /* --- NEW: one-time alias notice & a safe shadow for FR output --- */
-  static int alias_notice_printed = 0;
   static int8_t ALIGN_32 fr_out_shadow[FR_EMB_SIZE];
+
+  /* ---- recognition gate knobs (tuned to your logs) ---- */
+  #define RUN_FR_ON_BEST_ONLY   1
+  #define FR_REC_CONF_MIN       0.55f
+  #define FR_REC_SIDE_MIN       0.24f
+  #define FR_REC_CENTER_TOL     0.45f
 
   while (1)
   {
     (void)bqueue_get_ready(&nn_output_queue);
 
-    for (i = 0; i < NN_OUT_NB; i++) {
+    /* Map & invalidate NPU outputs for CPU read */
+    for (int i = 0; i < NN_OUT_NB; i++) {
       pp_input[i] = LL_Buffer_addr_start(&nn_out_info[i]);
       pp_len[i]   = LL_Buffer_len(&nn_out_info[i]);
       DCACHE_Invalidate(pp_input[i], pp_len[i]);
     }
 
-    /* BlazeFace heads: apply sigmoid to score tensors if needed */
-    int idx512 = -1, idx384 = -1;
-    for (int j = 0; j < NN_OUT_NB; ++j) {
-      int nf = (int)(pp_len[j] / (uint32_t)sizeof(float));
-      if (nf == 512) idx512 = j;
-      if (nf == 384) idx384 = j;
-    }
-    if (idx512 >= 0) {
-      float *p = (float*)pp_input[idx512];
-      for (int k = 0; k < 512; ++k) { float v = p[k]; p[k] = 1.f / (1.f + expf(-v)); }
-    }
-    if (idx384 >= 0) {
-      float *p = (float*)pp_input[idx384];
-      for (int k = 0; k < 384; ++k) { float v = p[k]; p[k] = 1.f / (1.f + expf(-v)); }
-    }
-
-    /* Throttled output stats */
+    /* Throttled output stats; skip if NaNs (prevents -inf spam) */
     {
       uint32_t now = HAL_GetTick();
       if ((now - last_blob_print) >= PRINT_BLOB_EVERY_MS) {
@@ -1226,28 +1301,17 @@ static void pp_thread_fct(void *arg)
             sum += v; cnt++;
             if (v != 0.f) nz++;
           }
-          float mean = cnt ? (sum / (float)cnt) : 0.f;
-          printf("[NN] out%d nf=%d  min=% .5f  max=% .5f  mean=% .5f  nz=%d  nan=%d\r\n",
-                 j, nf, minv, maxv, mean, nz, nan_cnt);
-        }
-
-        if (idx512 >= 0 && idx384 >= 0) {
-          const float *scrL = (const float*)pp_input[idx512];
-          const float *scrS = (const float*)pp_input[idx384];
-          float maxL = -1e30f, sumL = 0.f; int cntL = 0;
-          for (int k = 0; k < 512; ++k) { float v = scrL[k]; if (v==v) { if (v > maxL) maxL = v; sumL += v; cntL++; } }
-          float avgL = cntL ? (sumL / (float)cntL) : 0.f;
-          float maxS = -1e30f, sumS = 0.f; int cntS = 0;
-          for (int k = 0; k < 384; ++k) { float v = scrS[k]; if (v==v) { if (v > maxS) maxS = v; sumS += v; cntS++; } }
-          float avgS = cntS ? (sumS / (float)cntS) : 0.f;
-          printf("[NN] scores  L:max=%.3f avg=%.3f  S:max=%.3f avg=%.3f  (o%d,o%d)\r\n",
-                 maxL, avgL, maxS, avgS, idx512, idx384);
+          if (nan_cnt == 0 && cnt > 0) {
+            float mean = sum / (float)cnt;
+            printf("[NN] out%d nf=%d  min=% .5f  max=% .5f  mean=% .5f  nz=%d\r\n",
+                   j, nf, minv, maxv, mean, nz);
+          }
         }
         last_blob_print = now;
       }
     }
 
-    /* run detection postprocess */
+    /* Run detection postprocess */
     pp_output.pOutBuff  = NULL;
     pp_output.nb_detect = 0;
 
@@ -1261,7 +1325,7 @@ static void pp_thread_fct(void *arg)
     tracking_enabled = app_tracking(&pp_output);
     nn_pp[1] = HAL_GetTick();
 
-    /* result log (throttled) */
+    /* Throttled result log */
     {
       uint32_t now = HAL_GetTick();
       if ((now - last_result_print) >= PRINT_RESULT_EVERY_MS) {
@@ -1277,9 +1341,33 @@ static void pp_thread_fct(void *arg)
     }
 
     /* ===================== FACE RECOGNITION ===================== */
-    if (pp_output.nb_detect != 0) {
-      const int det_in_w = NN_WIDTH;
-      const int det_in_h = NN_HEIGHT;
+    if (pp_output.nb_detect > 0) {
+
+      /* snapshot detections so later writes can’t stomp them */
+      od_pp_outBuffer_t det_local[AI_OD_PP_MAX_BOXES_LIMIT];
+      int det_n = ((int)pp_output.nb_detect > AI_OD_PP_MAX_BOXES_LIMIT)
+                  ? AI_OD_PP_MAX_BOXES_LIMIT
+                  : (int)pp_output.nb_detect;
+      for (int t = 0; t < det_n; ++t) det_local[t] = pp_output.pOutBuff[t];
+
+      /* optionally choose ONE best detection */
+      int start_idx = 0, end_idx = det_n;
+#if RUN_FR_ON_BEST_ONLY
+      {
+        float best_score = -1.f; int best_idx = -1;
+        for (int k = 0; k < det_n; ++k) {
+          const od_pp_outBuffer_t *d = &det_local[k];
+          float side = fmaxf(d->width, d->height);
+          float dx = fabsf(d->x_center - 0.5f), dy = fabsf(d->y_center - 0.5f);
+          float r_center = sqrtf(dx*dx + dy*dy);            /* 0 at center, ~0.71 at corner */
+          float s_size   = fminf(1.f, side / 0.35f);        /* prefer larger faces */
+          float s_center = 1.f - fminf(1.f, r_center / 0.6f);
+          float score = d->conf * (0.25f + 0.75f * s_size) * s_center;
+          if (score > best_score) { best_score = score; best_idx = k; }
+        }
+        if (best_idx >= 0) { start_idx = best_idx; end_idx = best_idx + 1; }
+      }
+#endif
 
       /* FaceRec IO */
       const LL_Buffer_InfoTypeDef *fr_in_info  = LL_ATON_Input_Buffers_Info_face_recognition();
@@ -1290,32 +1378,29 @@ static void pp_thread_fct(void *arg)
       void     *fr_out_ptr = LL_Buffer_addr_start(&fr_out_info[0]);  /* INT8 output */
       uint32_t  fr_out_len = LL_Buffer_len(&fr_out_info[0]);
 
-      /* one-time, cleaner than spamming every det */
-      if (fr_in == fr_out_ptr && !alias_notice_printed) {
-        printf("[FR][INFO] Input/Output share base address (0x%p) — using shadow for readback.\r\n", fr_in);
-        alias_notice_printed = 1;
-      }
+      fr_check_alias(fr_in, fr_out_ptr); /* should be clean now that we bound IO */
 
-      /* sanity prints (kept) */
       const uint32_t fr_in_len_expect  = (uint32_t)(FR_IN_W * FR_IN_H * 3u * sizeof(float)); /* 150,528 */
-      const uint32_t fr_out_len_expect = (uint32_t)(FR_EMB_SIZE);                           /* 512 bytes int8 */
-      printf("[FR] buffers: in@%p len=%lu (exp=%lu)  out@%p len=%lu (exp=%lu)  det_in@%p %dx%d\r\n",
+      const uint32_t fr_out_len_expect = (uint32_t)(FR_EMB_SIZE);                            /* 512 bytes int8 */
+      printf("[FR] buffers: in@%p len=%lu (exp=%lu)  out@%p len=%lu (exp=%lu)  det_in %dx%d\r\n",
              (void*)fr_in, (unsigned long)fr_in_len, (unsigned long)fr_in_len_expect,
              (void*)fr_out_ptr, (unsigned long)fr_out_len, (unsigned long)fr_out_len_expect,
-             (const void*)NULL, det_in_w, det_in_h);
+             NN_WIDTH, NN_HEIGHT);
 
-      for (int di = 0; di < (int)pp_output.nb_detect; ++di) {
-        const od_pp_outBuffer_t *d = &pp_output.pOutBuff[di];
+      for (int di = start_idx; di < end_idx; ++di) {
+        const od_pp_outBuffer_t *d = &det_local[di];
 
-        float cx_px = d->x_center * det_in_w;
-        float cy_px = d->y_center * det_in_h;
-        float w_px  = d->width    * det_in_w;
-        float h_px  = d->height   * det_in_h;
-        printf("[FR-IN] det#%d ROI: cx=%.1f(%.3f) cy=%.1f(%.3f) w=%.1f(%.3f) h=%.1f(%.3f) conf=%.3f\r\n",
-               di, cx_px, d->x_center, cy_px, d->y_center, w_px, d->width, h_px, d->height, d->conf);
+        float side = fmaxf(d->width, d->height);
+        float dx   = fabsf(d->x_center - 0.5f);
+        float dy   = fabsf(d->y_center - 0.5f);
+        if (d->conf < FR_REC_CONF_MIN || side < FR_REC_SIDE_MIN || dx > FR_REC_CENTER_TOL || dy > FR_REC_CENTER_TOL) {
+          printf("[FR] det#%d skipped by quality gate (conf=%.3f side=%.3f off=(%.2f,%.2f))\r\n",
+                 di, d->conf, side, dx, dy);
+          continue;
+        }
 
-        /* Build FR input from last detector frame (crop+resize+[-1..1]) */
-        fr_prepare_input_for_det(d, fr_in, FR_IN_W, FR_IN_H, det_in_w, det_in_h, di);
+        /* Build FR input from last detector frame (crop+resize to [-1..1]) */
+        fr_prepare_input_for_det(d, fr_in, FR_IN_W, FR_IN_H, NN_WIDTH, NN_HEIGHT, di);
 
         /* cache ops */
         DCACHE_Clean(fr_in, fr_in_len);
@@ -1336,10 +1421,11 @@ static void pp_thread_fct(void *arg)
         uint32_t fr_ms = HAL_GetTick() - t0;
         printf("[TIM] FR  det#%d infer took %lums\r\n", di, (unsigned long)fr_ms);
 
-        /* read out (via shadow if aliased) & decide */
+        /* read out (via shadow if aliased — should not alias anymore) */
         DCACHE_Invalidate(fr_out_ptr, fr_out_len);
         if (fr_in == fr_out_ptr) {
-          memcpy(fr_out_shadow, fr_out_ptr, (fr_out_len < sizeof(fr_out_shadow)) ? fr_out_len : sizeof(fr_out_shadow));
+          size_t cpy = (fr_out_len < sizeof(fr_out_shadow)) ? fr_out_len : sizeof(fr_out_shadow);
+          memcpy(fr_out_shadow, fr_out_ptr, cpy);
           fr_after_inference_and_decide(fr_out_shadow, (int)FR_EMB_SIZE, di);
         } else {
           fr_after_inference_and_decide((const int8_t*)fr_out_ptr, (int)fr_out_len, di);
@@ -1348,26 +1434,30 @@ static void pp_thread_fct(void *arg)
     }
     /* =========================================================== */
 
-    ret = xSemaphoreTake(disp.lock, portMAX_DELAY);  assert(ret == pdTRUE);
+    /* Publish to display */
+    int lock = xSemaphoreTake(disp.lock, portMAX_DELAY);  assert(lock == pdTRUE);
     disp.info.nb_detect = pp_output.nb_detect;
-    for (i = 0; i < pp_output.nb_detect; i++)
+    for (int i = 0; i < pp_output.nb_detect; i++)
       disp.info.detects[i] = pp_output.pOutBuff[i];
 #ifdef TRACKER_MODULE
     disp.info.tracking_enabled = tracking_enabled;
     disp.info.tboxes_valid_nb = 0;
-    for (i = 0; i < ARRAY_NB(tboxes); i++) {
+    for (int i = 0; i < ARRAY_NB(tboxes); i++) {
       if (!tboxes[i].is_tracking || tboxes[i].tlost_cnt) continue;
       tbox_to_tbox_info(&tboxes[i], &disp.info.tboxes[disp.info.tboxes_valid_nb]);
+      disp.info.tboxes[disp.info.tboxes_valid_nb].id = tboxes[i].id;
       disp.info.tboxes_valid_nb++;
     }
 #endif
     disp.info.pp_ms = nn_pp[1] - nn_pp[0];
-    ret = xSemaphoreGive(disp.lock);                 assert(ret == pdTRUE);
+    lock = xSemaphoreGive(disp.lock);                     assert(lock == pdTRUE);
 
     bqueue_put_free(&nn_output_queue);
     xSemaphoreGive(disp.update);
   }
 }
+
+
 
 
 
@@ -1534,25 +1624,38 @@ static int xspi_enable_mmap_auto(void)
 
 static void xspi_quick_check(void)
 {
-    volatile const uint32_t *pA = (const uint32_t*)0x71000000u;  // base
-    volatile const uint32_t *pB = (const uint32_t*)0x71028590u;  // A_vector (scale) from network.c
-    volatile const uint32_t *pC = (const uint32_t*)0x71027FA0u;  // C_vector (bias)  from network.c
+  volatile const uint32_t *pA = (const uint32_t*)0x71000000u;  // Detector base
+  volatile const uint32_t *pB = (const uint32_t*)0x71028590u;  // some known word in detector
+  volatile const uint32_t *pC = (const uint32_t*)0x71027FA0u;
 
-    printf("[XSPI] 71000000: %08lX %08lX %08lX %08lX\r\n", pA[0], pA[1], pA[2], pA[3]);
-    printf("[XSPI] 71028590: %08lX %08lX %08lX %08lX\r\n", pB[0], pB[1], pB[2], pB[3]);
-    printf("[XSPI] 71027FA0: %08lX %08lX %08lX %08lX\r\n", pC[0], pC[1], pC[2], pC[3]);
+  volatile const uint32_t *fr0 = (const uint32_t*)0x71040000u; // FaceID base (your script)
+  volatile const uint32_t *fr1 = (const uint32_t*)0x71040100u;
+  volatile const uint32_t *fr2 = (const uint32_t*)0x71041000u;
+
+  printf("[XSPI] 71000000: %08lX %08lX %08lX %08lX\r\n", pA[0], pA[1], pA[2], pA[3]);
+  printf("[XSPI] 71028590: %08lX %08lX %08lX %08lX\r\n", pB[0], pB[1], pB[2], pB[3]);
+  printf("[XSPI] 71027FA0: %08lX %08lX %08lX %08lX\r\n", pC[0], pC[1], pC[2], pC[3]);
+
+  printf("[XSPI] 71040000: %08lX %08lX %08lX %08lX\r\n", fr0[0], fr0[1], fr0[2], fr0[3]);
+  printf("[XSPI] 71040100: %08lX %08lX %08lX %08lX\r\n", fr1[0], fr1[1], fr1[2], fr1[3]);
+  printf("[XSPI] 71041000: %08lX %08lX %08lX %08lX\r\n", fr2[0], fr2[1], fr2[2], fr2[3]);
 }
+
+
+
 
 
 
 
 void app_run()
 {
+  /* Map XSPI NOR and quick-check contents (optional but handy) */
   int inst = xspi_enable_mmap_auto();
   if (inst >= 0) {
-    xspi_quick_check();  // should match your CubeProgrammer readback
+    xspi_quick_check();  /* should match your CubeProgrammer readback */
   }
 
+  /* RTOS priorities & handles */
   UBaseType_t isp_priority = FREERTOS_PRIORITY(2);
   UBaseType_t pp_priority  = FREERTOS_PRIORITY(-2);
   UBaseType_t dp_priority  = FREERTOS_PRIORITY(-2);
@@ -1561,46 +1664,85 @@ void app_run()
   int ret;
 
   printf("Init application\n");
+
   /* Enable DWT so DWT_CYCCNT works when debugger not attached */
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
 
-  /* screen init */
+  /* Screen init */
   memset(lcd_bg_buffer, 0, sizeof(lcd_bg_buffer));
   CACHE_OP(SCB_CleanInvalidateDCache_by_Addr(lcd_bg_buffer, sizeof(lcd_bg_buffer)));
   memset(lcd_fg_buffer, 0, sizeof(lcd_fg_buffer));
   CACHE_OP(SCB_CleanInvalidateDCache_by_Addr(lcd_fg_buffer, sizeof(lcd_fg_buffer)));
   Display_init();
 
-  /* create buffer queues */
+  /* Create buffer queues */
   ret = bqueue_init(&nn_input_queue, 2, (uint8_t *[2]){nn_input_buffers[0], nn_input_buffers[1]});
   assert(ret == 0);
   ret = bqueue_init(&nn_output_queue, 2, (uint8_t *[2]){nn_output_buffers[0], nn_output_buffers[1]});
   assert(ret == 0);
 
 #ifdef TRACKER_MODULE
+  /* Tracker init + button */
   ret = TRK_Init();                                   assert(ret == 0);
   ret = BSP_PB_Init(BUTTON_TOGGLE_TRACKING, BUTTON_MODE_GPIO);
   assert(ret == BSP_ERROR_NONE);
 #endif
 
+  /* CPU load stats */
   cpuload_init(&cpu_load);
 
   /*** Camera Init ************************************************************/
   CAM_Init();
 
-  /* sems + mutex init */
+  /* Semaphores + mutex init */
   isp_sem     = xSemaphoreCreateCountingStatic(1, 0, &isp_sem_buffer);     assert(isp_sem);
   disp.update = xSemaphoreCreateCountingStatic(1, 0, &disp.update_buffer); assert(disp.update);
   disp.lock   = xSemaphoreCreateMutexStatic(&disp.lock_buffer);             assert(disp.lock);
 
-  /* === NEW: global NPU mutex + FR state === */
+  /* === Global NPU mutex/guard === */
   npu_guard_init();
+
+  /* ---- Bind FaceRec dedicated, non-aliased user IO buffers (globals) ----
+       static float  g_fr_in_user [FR_IN_W * FR_IN_H * 3] ALIGN_32 IN_PSRAM;
+       static int8_t g_fr_out_user[FR_EMB_SIZE]           ALIGN_32 IN_PSRAM; */
+  int r_in  = LL_ATON_Set_User_Input_Buffer_face_recognition (0, (void*)g_fr_in_user,  sizeof(g_fr_in_user));
+  int r_out = LL_ATON_Set_User_Output_Buffer_face_recognition(0, (void*)g_fr_out_user, sizeof(g_fr_out_user));
+  printf("[FR] bind IO: in=%s out=%s (in_len=%lu out_len=%lu)\r\n",
+         aton_io_errstr(r_in), aton_io_errstr(r_out),
+         (unsigned long)sizeof(g_fr_in_user),
+         (unsigned long)sizeof(g_fr_out_user));
+
+  /* Verify runtime actually points to our buffers and not the same region */
+  {
+    const LL_Buffer_InfoTypeDef *chk_in  = LL_ATON_Input_Buffers_Info_face_recognition();
+    const LL_Buffer_InfoTypeDef *chk_out = LL_ATON_Output_Buffers_Info_face_recognition();
+    void *p_in  = LL_Buffer_addr_start(&chk_in [0]);
+    void *p_out = LL_Buffer_addr_start(&chk_out[0]);
+    printf("[FR] post-bind addrs: IN=%p OUT=%p\r\n", p_in, p_out);
+
+    const int fr_user_io_ok =
+        (r_in  == LL_ATON_User_IO_NOERROR) &&
+        (r_out == LL_ATON_User_IO_NOERROR);
+
+    if (!fr_user_io_ok) {
+      printf("[FR][WARN] User I/O binding failed (in=%s out=%s). "
+             "Falling back to aliased default; shadow-copy path is enabled.\r\n",
+             aton_io_errstr(r_in), aton_io_errstr(r_out));
+    }
+
+    if (p_in == p_out) {
+      printf("[FR][WARN] IN and OUT alias (0x%p). This is OK with the shadow output copy.\r\n", p_in);
+    }
+
+  }
+
+  /* Face recognition module init (after IO binding) */
   fr_init();
 
   /* Start LCD Display camera pipe stream */
   CAM_DisplayPipe_Start(lcd_bg_buffer[0], CMW_MODE_CONTINUOUS);
 
-  /* threads init */
+  /* Threads init */
   hdl = xTaskCreateStatic(nn_thread_fct, "nn",  configMINIMAL_STACK_SIZE * 2, NULL, nn_priority, nn_thread_stack, &nn_thread);
   assert(hdl != NULL);
   hdl = xTaskCreateStatic(pp_thread_fct, "pp",  configMINIMAL_STACK_SIZE * 2, NULL, pp_priority, pp_thread_stack, &pp_thread);
@@ -1610,6 +1752,9 @@ void app_run()
   hdl = xTaskCreateStatic(isp_thread_fct, "isp",configMINIMAL_STACK_SIZE * 2, NULL, isp_priority, isp_thread_stack, &isp_thread);
   assert(hdl != NULL);
 }
+
+
+
 
 
 

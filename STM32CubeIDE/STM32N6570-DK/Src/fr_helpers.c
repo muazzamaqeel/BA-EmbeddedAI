@@ -1,3 +1,4 @@
+/* ========================= fr_helpers.c ========================= */
 #include "fr_helpers.h"
 #include <math.h>
 #include <string.h>
@@ -8,12 +9,16 @@
 static float g_last_frame[NN_WIDTH * NN_HEIGHT * 3];
 
 /* ===== enrollment (centroid in RAM) ===== */
-#define FR_SAMPLES_TARGET 10
+#define FR_SAMPLES_TARGET 10  /* number of samples to build the centroid */
 
 static float g_me_samples[FR_SAMPLES_TARGET][FR_EMB_SIZE];
 static float g_me_centroid[FR_EMB_SIZE];
-static int   g_me_count = 0;
-static int   g_enroll_done = 0;
+static int   g_me_count       = 0;
+static int   g_enroll_done    = 0;
+
+/* runtime-configurable match threshold & per-detection enroll gate */
+static float g_match_thr   = FR_DEFAULT_MATCH_THR;
+static int   g_enroll_gate = 1;  /* set per detection by fr_set_enroll_gate() */
 
 /* (optional) small gallery for 1:N (paste yours if you want) */
 static const float g_ref_emb[][FR_EMB_SIZE] = {
@@ -48,7 +53,7 @@ static void fr_add_sample_normed_copy(const float *emb, int n)
   for (int i=0;i<n;i++) dst[i] = emb[i];
   fr_l2_normalize(dst, n);
   g_me_count++;
-  printf("[ENROLL] stored sample %d/%d\n", g_me_count, FR_SAMPLES_TARGET);
+  printf("[ENROLL] stored sample %d/%d\r\n", g_me_count, FR_SAMPLES_TARGET);
 }
 
 static void fr_finalize_enrollment(int n)
@@ -61,17 +66,32 @@ static void fr_finalize_enrollment(int n)
   for (int i=0;i<n;i++) g_me_centroid[i] *= inv;
   fr_l2_normalize(g_me_centroid, n);
   g_enroll_done = 1;
-  printf("[ENROLL] completed with %d samples. Centroid ready.\n", g_me_count);
+  printf("[ENROLL] completed with %d samples. Centroid ready.\r\n", g_me_count);
+}
+
+/* ---------- runtime config ---------- */
+void fr_set_match_threshold(float thr) { g_match_thr = thr; }
+void fr_set_enroll_gate(int ok)        { g_enroll_gate = ok; }
+
+void fr_reset_enrollment(void)
+{
+  memset(g_me_samples, 0, sizeof(g_me_samples));
+  memset(g_me_centroid, 0, sizeof(g_me_centroid));
+  g_me_count    = 0;
+  g_enroll_done = 0;
+  printf("[ENROLL] reset. Need %d fresh samples.\r\n", FR_SAMPLES_TARGET);
 }
 
 /* ---------- API ---------- */
 void fr_init(void)
 {
   memset(g_last_frame, 0, sizeof(g_last_frame));
-  memset(g_me_samples, 0, sizeof(g_me_samples));
-  memset(g_me_centroid, 0, sizeof(g_me_centroid));
-  g_me_count = 0;
-  g_enroll_done = 0;
+  fr_reset_enrollment();
+  g_match_thr   = FR_DEFAULT_MATCH_THR;
+  g_enroll_gate = 1;
+
+  printf("[FR][CFG] subject=\"%s\" match_thr=%.2f  enroll: conf>=%.2f  minSide>=%.2f  centerTol<=%.2f\r\n",
+         FR_SUBJECT_NAME, g_match_thr, FR_ENROLL_CONF_MIN, FR_ENROLL_MIN_SIDE, FR_ENROLL_CENTER_TOL);
 }
 
 void fr_update_frame_snapshot(const float *src_nhwc, uint32_t bytes)
@@ -156,7 +176,7 @@ void fr_prepare_input_for_det(const od_pp_outBuffer_t *d,
     float mean = (N - nan_cnt) ? (sum / (float)(N - nan_cnt)) : 0.f;
     printf("[FR-IN] det#%d stats: min=% .3f  max=% .3f  mean=% .3f  NaN=%d  size=%dx%dx3\r\n",
            det_idx, mn, mx, mean, nan_cnt, fr_w, fr_h);
-    printf("[TIM] CROP %3d took %lums\n", det_idx, (unsigned long)(t1 - t0));
+    printf("[TIM] CROP %3d took %lums\r\n", det_idx, (unsigned long)(t1 - t0));
   }
 }
 
@@ -181,24 +201,29 @@ void fr_after_inference_and_decide(const int8_t *emb_q, int emb_len, int det_idx
 
   /* Enrollment then match */
   if (!g_enroll_done) {
+    if (!g_enroll_gate) {
+      printf("[ENROLL] skipped this detection (gate=0)\r\n");
+      return;
+    }
     fr_add_sample_normed_copy(emb_f, n);
     if (g_me_count >= FR_SAMPLES_TARGET) {
       fr_finalize_enrollment(n);
     } else {
-      printf("[ENROLL] waiting for %d more sample(s)...\n",
+      printf("[ENROLL] waiting for %d more sample(s)...\r\n",
              FR_SAMPLES_TARGET - g_me_count);
     }
     return;
   }
 
-  /* Compare to centroid (Muazzam) */
+  /* Compare to centroid (subject) */
   float sim_me = cosine_similarity(emb_f, g_me_centroid, n);
-  printf("[FR] det#%d ME? sim=%.3f (thr=%.2f) -> %s\n",
-         det_idx, sim_me, FR_MATCH_THR, (sim_me >= FR_MATCH_THR) ? "YES" : "NO");
-  if (sim_me >= FR_MATCH_THR) {
-    printf(">>> Muazzam FACE FOUND (sim=%.3f >= thr=%.2f)\r\n", sim_me, FR_MATCH_THR);
+  printf("[FR] det#%d %s? sim=%.3f (thr=%.2f) -> %s\r\n",
+         det_idx, FR_SUBJECT_NAME, sim_me, g_match_thr,
+         (sim_me >= g_match_thr) ? "YES" : "NO");
+  if (sim_me >= g_match_thr) {
+    printf(">>> %s FACE FOUND (sim=%.3f >= thr=%.2f)\r\n", FR_SUBJECT_NAME, sim_me, g_match_thr);
   } else {
-    printf(">>> WRONG FACE FOUND (sim=%.3f < thr=%.2f)\r\n", sim_me, FR_MATCH_THR);
+    printf(">>> WRONG FACE FOUND (sim=%.3f < thr=%.2f)\r\n", sim_me, g_match_thr);
   }
 
   /* Optional 1:N gallery */
@@ -210,7 +235,7 @@ void fr_after_inference_and_decide(const int8_t *emb_q, int emb_len, int det_idx
       if (s > best_sim) { best_sim = s; best_idx = r; }
     }
     if (best_idx >= 0) {
-      printf("[FR] det#%d gallery best: %s (sim=%.3f)\n",
+      printf("[FR] det#%d gallery best: %s (sim=%.3f)\r\n",
              det_idx, g_ref_name[best_idx], best_sim);
     }
   }
