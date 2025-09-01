@@ -204,7 +204,8 @@ static uint8_t screen_buffer[LCD_BG_WIDTH * LCD_BG_HEIGHT * 2] ALIGN_32 IN_PSRAM
 
 /* model */
 LL_ATON_DECLARE_NAMED_NN_INSTANCE_AND_INTERFACE(Default);
-LL_ATON_DECLARE_NAMED_NN_INSTANCE_AND_INTERFACE(FaceRec);
+LL_ATON_DECLARE_NAMED_NN_INSTANCE_AND_INTERFACE(face_recognition);
+
 
  /* nn input buffers */
 /* Camera NN pipe delivers RGB888: 128*128*3 = 49,152 bytes */
@@ -1242,11 +1243,11 @@ static void pp_thread_fct(void *arg)
         const int det_in_h = NN_HEIGHT;
 
         /* 2) FaceRec input/output buffers */
-        const LL_Buffer_InfoTypeDef *fr_in_info  = LL_ATON_Input_Buffers_Info_FaceRec();
+        const LL_Buffer_InfoTypeDef *fr_in_info  = LL_ATON_Input_Buffers_Info_face_recognition();
         float    *fr_in     = (float*)   LL_Buffer_addr_start(&fr_in_info[0]);
         uint32_t  fr_in_len =            LL_Buffer_len(&fr_in_info[0]);
 
-        const LL_Buffer_InfoTypeDef *fr_out_info = LL_ATON_Output_Buffers_Info_FaceRec();
+        const LL_Buffer_InfoTypeDef *fr_out_info = LL_ATON_Output_Buffers_Info_face_recognition();
         float    *fr_emb     = (float*)  LL_Buffer_addr_start(&fr_out_info[0]);
         uint32_t  fr_out_len =           LL_Buffer_len(&fr_out_info[0]);
 
@@ -1343,7 +1344,7 @@ static void pp_thread_fct(void *arg)
 
           /* Run FaceRec */
           uint32_t t0 = HAL_GetTick();
-          LL_ATON_RT_Main(&NN_Instance_FaceRec);
+          LL_ATON_DECLARE_NAMED_NN_INSTANCE_AND_INTERFACE(face_recognition);
           uint32_t fr_ms = HAL_GetTick() - t0;
 
           /* Invalidate output (embedding) then stats */
