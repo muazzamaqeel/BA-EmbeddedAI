@@ -1,4 +1,8 @@
- /**
+#define MY_NAME "Muazzam"
+#include "npu_guard.h"
+#include "fr_helpers.h"
+
+/**
  ******************************************************************************
  * @file    app.c
  * @author  GPM Application Team
@@ -21,7 +25,7 @@
 #include "stm32n6570_discovery_xspi.h"
 #include <math.h>
 #include <stdint.h>
-
+#include <string.h>
 #include "app_cam.h"
 #include "app_config.h"
 #include "app_postprocess.h"
@@ -98,6 +102,7 @@
 #define LCD_FONT Font12
 #define BUTTON_TOGGLE_TRACKING BUTTON_USER
 #endif
+//static float g_last_frame[NN_WIDTH * NN_HEIGHT * 3] ALIGN_32 IN_PSRAM;
 
 #ifdef TRACKER_MODULE
 typedef struct {
@@ -699,15 +704,30 @@ static const char* aton_io_errstr(int r){
 /* - input stats (throttled)      */
 /* - proper cache maintenance     */
 /* ============================== */
+
+
+/* ============================== */
+/* nn_thread_fct — INTERNAL-IO    */
+/* - camera RGB/BGR888 -> f32     */
+/* - input stats (throttled)      */
+/* - proper cache maintenance     */
+/* ============================== */
+/* ============================== */
+/* nn_thread_fct — INTERNAL-IO    */
+/* - camera RGB/BGR888 -> f32     */
+/* - input stats (throttled)      */
+/* - proper cache maintenance     */
+/* ============================== */
+
 static void nn_thread_fct(void *arg)
 {
   /* toggles */
-  #define NN_LOG_INPUT_STATS       1    /* print input float stats ~1Hz */
-  #define NN_ONE_SHOT_SYNTH_TEST   0    /* OFF: don’t overwrite real frames */
+  #define NN_LOG_INPUT_STATS       1
+  #define NN_ONE_SHOT_SYNTH_TEST   0
 
   /* input/layout */
-  #define INPUT_IS_BGR 0                /* camera pipe outputs RGB888 */
-  #define PACK_AS_NCHW 0                /* BlazeFace is NHWC typically */
+  #define INPUT_IS_BGR 0
+  #define PACK_AS_NCHW 0
 
   /* Get model input buffer (internal, not user-allocated) */
   const LL_Buffer_InfoTypeDef *nn_in_info  = LL_ATON_Input_Buffers_Info_Default();
@@ -729,7 +749,7 @@ static void nn_thread_fct(void *arg)
   uint32_t last_inp_print = 0;
   int did_synth = 0;
 
-  /* Preprocess: map [0..255] -> [-1..1] */
+  /* Preprocess: map [0..255] -> [0..1] (BlazeFace expects [0..1]) */
   const float scale = 1.0f / 255.0f;
   const float bias  = 0.0f;
 
@@ -771,17 +791,10 @@ static void nn_thread_fct(void *arg)
         dstR[i] = r; dstG[i] = g; dstB[i] = b;
 #if NN_LOG_INPUT_STATS
         if ((HAL_GetTick() - last_inp_print) >= 1000U && ((i & 0x3F) == 0)) {
-          if (r < mn) mn = r;
-          if (r > mx) mx = r;
-          sum += r; cnt++;
-          if (g < mn) mn = g;
-          if (g > mx) mx = g;
-          sum += g; cnt++;
-          if (b < mn) mn = b;
-          if (b > mx) mx = b;
-          sum += b; cnt++;
+          if (r < mn) mn = r; if (r > mx) mx = r; sum += r; cnt++;
+          if (g < mn) mn = g; if (g > mx) mx = g; sum += g; cnt++;
+          if (b < mn) mn = b; if (b > mx) mx = b; sum += b; cnt++;
         }
-
 #endif
       }
 #else
@@ -815,6 +828,9 @@ static void nn_thread_fct(void *arg)
       /* cache clean: CPU wrote input, NPU will read it */
       DCACHE_Clean(aton_in, aton_in_len);
 
+      /* publish detector input snapshot to FR module */
+      fr_update_frame_snapshot(aton_in, aton_in_len);
+
 #if NN_LOG_INPUT_STATS
       if ((HAL_GetTick() - last_inp_print) >= 1000U) {
         float mean = (cnt > 0) ? (sum / (float)cnt) : 0.f;
@@ -825,28 +841,26 @@ static void nn_thread_fct(void *arg)
 #endif
     }
 
-    /* -------- Inference -------- */
+    /* -------- prepare outputs for NPU write -------- */
     {
-      /* Clean output buffers before NPU writes to them */
-    	/* Prepare outputs for NPU write: invalidate before peripheral writes */
-    	/* Prepare outputs for NPU write: Clean+Invalidate BEFORE run */
-    	const LL_Buffer_InfoTypeDef *nn_out_info = LL_ATON_Output_Buffers_Info_Default();
-    	for (int i = 0; i < NN_OUT_NB; ++i) {
-    	    void *oaddr = LL_Buffer_addr_start(&nn_out_info[i]);
-    	    size_t olen = (size_t)LL_Buffer_len(&nn_out_info[i]);  // was uint32_t
-    	#if defined(USE_DCACHE)
-    	    dcache_align_range(&oaddr, &olen);
-    	    SCB_CleanInvalidateDCache_by_Addr(oaddr, (int)olen);
-    	#endif
-    	}
-
-
-
+      const LL_Buffer_InfoTypeDef *nn_out_info = LL_ATON_Output_Buffers_Info_Default();
+      for (int i = 0; i < NN_OUT_NB; ++i) {
+        void *oaddr = LL_Buffer_addr_start(&nn_out_info[i]);
+        size_t olen = (size_t)LL_Buffer_len(&nn_out_info[i]);
+#if defined(USE_DCACHE)
+        dcache_align_range(&oaddr, &olen);
+        SCB_CleanInvalidateDCache_by_Addr(oaddr, (int)olen);
+#endif
+      }
     }
 
+    /* inference (serialize on NPU) */
     uint32_t ts = HAL_GetTick();
+    NPU_Lock(TAG_NN);
     LL_ATON_RT_Main(&NN_Instance_Default);
+    NPU_Unlock(TAG_NN);
     uint32_t inf_ms = HAL_GetTick() - ts;
+    printf("[TIM] NN  infer took %lums\r\n", (unsigned long)inf_ms);
 
     /* queues */
     bqueue_put_free(&nn_input_queue);
@@ -979,7 +993,52 @@ static int app_tracking(od_pp_out_t *pp)
 #define FR_IN_W 112
 #define FR_IN_H 112
 #define FR_EMB_SIZE 512
-#define FR_MATCH_THR 0.80f  // cosine similarity threshold (tune as you like)
+#define FR_MATCH_THR 0.50f  // cosine similarity threshold (tune as you like)
+
+
+// ===== [ADD] FR enrollment-in-RAM ===========================================
+#define FR_SAMPLES_TARGET 10  // enroll exactly 10 samples once after boot
+
+/* Snapshot of the detector input for FaceRec (decouples from internal IO aliasing) */
+static float g_me_samples[FR_SAMPLES_TARGET][FR_EMB_SIZE];
+static float g_me_centroid[FR_EMB_SIZE];
+static int   g_me_count = 0;       // #samples collected so far
+static int   g_enroll_done = 0;    // becomes 1 when centroid is ready
+
+static void fr_l2_normalize(float *v, int n)
+{
+  float s = 0.f; for (int i=0;i<n;i++) s += v[i]*v[i];
+  float inv = 1.0f / (sqrtf(s) + 1e-9f);
+  for (int i=0;i<n;i++) v[i] *= inv;
+}
+
+static void fr_add_sample(const float *emb, int n)
+{
+  // copy & L2-normalize the sample
+  float *dst = g_me_samples[g_me_count];
+  for (int i=0;i<n;i++) dst[i] = emb[i];
+  fr_l2_normalize(dst, n);
+  g_me_count++;
+  printf("[ENROLL] stored sample %d/%d\n", g_me_count, FR_SAMPLES_TARGET);
+}
+
+static void fr_finalize_enrollment(int n)
+{
+  // centroid = mean of normalized samples, then normalize
+  for (int i=0;i<n;i++) g_me_centroid[i] = 0.f;
+  for (int k=0;k<g_me_count;k++)
+    for (int i=0;i<n;i++)
+      g_me_centroid[i] += g_me_samples[k][i];
+  float inv = 1.0f / (float)g_me_count;
+  for (int i=0;i<n;i++) g_me_centroid[i] *= inv;
+  fr_l2_normalize(g_me_centroid, n);
+
+  g_enroll_done = 1;
+  printf("[ENROLL] completed with %d samples. Centroid ready.\n", g_me_count);
+}
+// ============================================================================
+
+
 
 // [ADD - your enrollment database]
 // Fill these with your real 512-D embeddings (captured offline) and matching names.
@@ -1075,11 +1134,6 @@ static void crop_to_facerec_input_from_detector_input(
 
 
 
-
-
-
-
-
 static void pp_thread_fct(void *arg)
 {
 #if POSTPROCESS_TYPE == POSTPROCESS_OD_YOLO_V2_UF
@@ -1098,7 +1152,7 @@ static void pp_thread_fct(void *arg)
 
   const LL_Buffer_InfoTypeDef *nn_out_info = LL_ATON_Output_Buffers_Info_Default();
 
-  /* print once */
+  /* print once: model outputs layout */
   {
     for (int i = 0; i < NN_OUT_NB; ++i) {
       const char *nm = nn_out_info[i].name ? nn_out_info[i].name : "(null)";
@@ -1115,34 +1169,33 @@ static void pp_thread_fct(void *arg)
   uint32_t nn_pp[2];
   int ret, i;
 
-  /* init postprocess */
 #if POSTPROCESS_TYPE == POSTPROCESS_CUSTOM
   app_postprocess_init(NULL);
 #else
   app_postprocess_init(&pp_params);
 #endif
 
-  const uint32_t PRINT_BLOB_EVERY_MS   = 500;  /* throttle heavy logs */
+  const uint32_t PRINT_BLOB_EVERY_MS   = 500;
   const uint32_t PRINT_RESULT_EVERY_MS = 250;
   uint32_t last_blob_print   = 0;
   uint32_t last_result_print = 0;
 
+  /* --- NEW: one-time alias notice & a safe shadow for FR output --- */
+  static int alias_notice_printed = 0;
+  static int8_t ALIGN_32 fr_out_shadow[FR_EMB_SIZE];
 
   while (1)
   {
-    /* wait “inference-done” token from nn thread */
     (void)bqueue_get_ready(&nn_output_queue);
 
-    /* grab internal output pointers/sizes */
     for (i = 0; i < NN_OUT_NB; i++) {
       pp_input[i] = LL_Buffer_addr_start(&nn_out_info[i]);
       pp_len[i]   = LL_Buffer_len(&nn_out_info[i]);
-      /* cache invalidate: NPU wrote, CPU will read */
       DCACHE_Invalidate(pp_input[i], pp_len[i]);
     }
 
-    /* ---------- BlazeFace: convert logits -> probabilities (sigmoid) ---------- */
-    int idx512 = -1, idx384 = -1;  /* large/small score heads */
+    /* BlazeFace heads: apply sigmoid to score tensors if needed */
+    int idx512 = -1, idx384 = -1;
     for (int j = 0; j < NN_OUT_NB; ++j) {
       int nf = (int)(pp_len[j] / (uint32_t)sizeof(float));
       if (nf == 512) idx512 = j;
@@ -1156,9 +1209,8 @@ static void pp_thread_fct(void *arg)
       float *p = (float*)pp_input[idx384];
       for (int k = 0; k < 384; ++k) { float v = p[k]; p[k] = 1.f / (1.f + expf(-v)); }
     }
-    /* ------------------------------------------------------------------------- */
 
-    /* blob quick stats (throttled) — now scores are in [0..1] */
+    /* Throttled output stats */
     {
       uint32_t now = HAL_GetTick();
       if ((now - last_blob_print) >= PRINT_BLOB_EVERY_MS) {
@@ -1168,7 +1220,7 @@ static void pp_thread_fct(void *arg)
           float maxv = -1e30f, minv = 1e30f, sum = 0.f; int cnt = 0, nz = 0, nan_cnt = 0;
           for (int k = 0; k < nf; k++) {
             float v = p[k];
-            if (v != v) { nan_cnt++; continue; } /* NaN */
+            if (v != v) { nan_cnt++; continue; }
             if (v > maxv) maxv = v;
             if (v < minv) minv = v;
             sum += v; cnt++;
@@ -1195,7 +1247,7 @@ static void pp_thread_fct(void *arg)
       }
     }
 
-    /* run postprocess (dets) */
+    /* run detection postprocess */
     pp_output.pOutBuff  = NULL;
     pp_output.nb_detect = 0;
 
@@ -1209,7 +1261,7 @@ static void pp_thread_fct(void *arg)
     tracking_enabled = app_tracking(&pp_output);
     nn_pp[1] = HAL_GetTick();
 
-    /* pretty result line (throttled) */
+    /* result log (throttled) */
     {
       uint32_t now = HAL_GetTick();
       if ((now - last_result_print) >= PRINT_RESULT_EVERY_MS) {
@@ -1224,194 +1276,78 @@ static void pp_thread_fct(void *arg)
       }
     }
 
-
-
-
     /* ===================== FACE RECOGNITION ===================== */
-    {
-      /* If no detections, FR won’t run; log once per frame why. */
-      if (pp_output.nb_detect == 0) {
-        // nothing to recognize; keep PP log above
-      } else if (g_ref_count == 0) {
-        printf("[FR] Gallery empty -> skip face recognition (have %ld detections)\r\n",
-               (long)pp_output.nb_detect);
-      } else {
-        /* 1) Detector input tensor used for this inference (FP32 NHWC [0..1]) */
-        const LL_Buffer_InfoTypeDef *det_in_info = LL_ATON_Input_Buffers_Info_Default();
-        const float *det_in_nhwc = (const float*)LL_Buffer_addr_start(&det_in_info[0]);
-        const int det_in_w = NN_WIDTH;
-        const int det_in_h = NN_HEIGHT;
+    if (pp_output.nb_detect != 0) {
+      const int det_in_w = NN_WIDTH;
+      const int det_in_h = NN_HEIGHT;
 
-        /* 2) FaceRec input/output buffers */
-        const LL_Buffer_InfoTypeDef *fr_in_info  = LL_ATON_Input_Buffers_Info_face_recognition();
-        float    *fr_in     = (float*)   LL_Buffer_addr_start(&fr_in_info[0]);
-        uint32_t  fr_in_len =            LL_Buffer_len(&fr_in_info[0]);
+      /* FaceRec IO */
+      const LL_Buffer_InfoTypeDef *fr_in_info  = LL_ATON_Input_Buffers_Info_face_recognition();
+      float    *fr_in     = (float*)   LL_Buffer_addr_start(&fr_in_info[0]);
+      uint32_t  fr_in_len =            LL_Buffer_len(&fr_in_info[0]);
 
-        const LL_Buffer_InfoTypeDef *fr_out_info = LL_ATON_Output_Buffers_Info_face_recognition();
-        float    *fr_emb     = (float*)  LL_Buffer_addr_start(&fr_out_info[0]);
-        uint32_t  fr_out_len =           LL_Buffer_len(&fr_out_info[0]);
+      const LL_Buffer_InfoTypeDef *fr_out_info = LL_ATON_Output_Buffers_Info_face_recognition();
+      void     *fr_out_ptr = LL_Buffer_addr_start(&fr_out_info[0]);  /* INT8 output */
+      uint32_t  fr_out_len = LL_Buffer_len(&fr_out_info[0]);
 
-        /* Expected sizes (for sanity logs only) */
-        const uint32_t fr_in_len_expect  = (uint32_t)(FR_IN_W * FR_IN_H * 3u * sizeof(float));
-        const uint32_t fr_out_len_expect = (uint32_t)(FR_EMB_SIZE * sizeof(float));
-        printf("[FR] buffers: in@%p len=%lu (exp=%lu)  out@%p len=%lu (exp=%lu)  det_in@%p %dx%d\r\n",
-               (void*)fr_in,   (unsigned long)fr_in_len,  (unsigned long)fr_in_len_expect,
-               (void*)fr_emb,  (unsigned long)fr_out_len, (unsigned long)fr_out_len_expect,
-               (const void*)det_in_nhwc, det_in_w, det_in_h);
+      /* one-time, cleaner than spamming every det */
+      if (fr_in == fr_out_ptr && !alias_notice_printed) {
+        printf("[FR][INFO] Input/Output share base address (0x%p) — using shadow for readback.\r\n", fr_in);
+        alias_notice_printed = 1;
+      }
 
-        /* Snapshot the detector input to avoid races with the next frame */
-        static float fr_src_snapshot[NN_WIDTH * NN_HEIGHT * 3];
-        memcpy(fr_src_snapshot, det_in_nhwc, sizeof(fr_src_snapshot));
+      /* sanity prints (kept) */
+      const uint32_t fr_in_len_expect  = (uint32_t)(FR_IN_W * FR_IN_H * 3u * sizeof(float)); /* 150,528 */
+      const uint32_t fr_out_len_expect = (uint32_t)(FR_EMB_SIZE);                           /* 512 bytes int8 */
+      printf("[FR] buffers: in@%p len=%lu (exp=%lu)  out@%p len=%lu (exp=%lu)  det_in@%p %dx%d\r\n",
+             (void*)fr_in, (unsigned long)fr_in_len, (unsigned long)fr_in_len_expect,
+             (void*)fr_out_ptr, (unsigned long)fr_out_len, (unsigned long)fr_out_len_expect,
+             (const void*)NULL, det_in_w, det_in_h);
 
-        /* For each detection: crop->resize->normalize -> FaceRec -> cosine match */
-        for (int di = 0; di < (int)pp_output.nb_detect; ++di) {
-          const od_pp_outBuffer_t *d = &pp_output.pOutBuff[di];
+      for (int di = 0; di < (int)pp_output.nb_detect; ++di) {
+        const od_pp_outBuffer_t *d = &pp_output.pOutBuff[di];
 
-          /* Log the ROI as pixels + normalized */
-          float cx_px = d->x_center * det_in_w;
-          float cy_px = d->y_center * det_in_h;
-          float w_px  = d->width    * det_in_w;
-          float h_px  = d->height   * det_in_h;
-          printf("[FR-IN] det#%d ROI: cx=%.1f(%0.3f) cy=%.1f(%0.3f) w=%.1f(%0.3f) h=%.1f(%0.3f) conf=%.3f\r\n",
-                 di, cx_px, d->x_center, cy_px, d->y_center, w_px, d->width, h_px, d->height, d->conf);
+        float cx_px = d->x_center * det_in_w;
+        float cy_px = d->y_center * det_in_h;
+        float w_px  = d->width    * det_in_w;
+        float h_px  = d->height   * det_in_h;
+        printf("[FR-IN] det#%d ROI: cx=%.1f(%.3f) cy=%.1f(%.3f) w=%.1f(%.3f) h=%.1f(%.3f) conf=%.3f\r\n",
+               di, cx_px, d->x_center, cy_px, d->y_center, w_px, d->width, h_px, d->height, d->conf);
 
-          /* --- Crop+Resize from snapshot (FP32 NHWC, [0..1]) to FaceRec input (FP32 NHWC, [-1..1]) --- */
-          {
-            float cx = cx_px;
-            float cy = cy_px;
-            float side = fmaxf(w_px, h_px) * 1.10f;  /* margin */
-            float x0 = cx - side * 0.5f;
-            float y0 = cy - side * 0.5f;
-            float sx_scale = side / (float)FR_IN_W;
-            float sy_scale = side / (float)FR_IN_H;
+        /* Build FR input from last detector frame (crop+resize+[-1..1]) */
+        fr_prepare_input_for_det(d, fr_in, FR_IN_W, FR_IN_H, det_in_w, det_in_h, di);
 
-            for (int y = 0; y < FR_IN_H; ++y) {
-              float sy = y0 + (y + 0.5f) * sy_scale;
-              int sy0 = (int)floorf(sy);
-              int sy1 = sy0 + 1;
-              float wy = sy - (float)sy0;
-              if (sy0 < 0) sy0 = 0; if (sy0 >= det_in_h) sy0 = det_in_h-1;
-              if (sy1 < 0) sy1 = 0; if (sy1 >= det_in_h) sy1 = det_in_h-1;
+        /* cache ops */
+        DCACHE_Clean(fr_in, fr_in_len);
+#if defined(USE_DCACHE)
+        {
+          void *oaddr = LL_Buffer_addr_start(&fr_out_info[0]);
+          size_t olen = LL_Buffer_len(&fr_out_info[0]);
+          dcache_align_range(&oaddr, &olen);
+          SCB_CleanInvalidateDCache_by_Addr(oaddr, (int)olen);
+        }
+#endif
 
-              for (int x = 0; x < FR_IN_W; ++x) {
-                float sx = x0 + (x + 0.5f) * sx_scale;
-                int sx0 = (int)floorf(sx);
-                int sx1 = sx0 + 1;
-                float wx = sx - (float)sx0;
-                if (sx0 < 0) sx0 = 0; if (sx0 >= det_in_w) sx0 = det_in_w-1;
-                if (sx1 < 0) sx1 = 0; if (sx1 >= det_in_w) sx1 = det_in_w-1;
+        /* Serialize FR inference on NPU + timing */
+        uint32_t t0 = HAL_GetTick();
+        NPU_Lock(TAG_FR);
+        LL_ATON_RT_Main(&NN_Instance_face_recognition);
+        NPU_Unlock(TAG_FR);
+        uint32_t fr_ms = HAL_GetTick() - t0;
+        printf("[TIM] FR  det#%d infer took %lums\r\n", di, (unsigned long)fr_ms);
 
-                int idx00 = (sy0*det_in_w + sx0)*3;
-                int idx01 = (sy0*det_in_w + sx1)*3;
-                int idx10 = (sy1*det_in_w + sx0)*3;
-                int idx11 = (sy1*det_in_w + sx1)*3;
-
-                float w00 = (1.f-wx)*(1.f-wy);
-                float w01 = (     wx)*(1.f-wy);
-                float w10 = (1.f-wx)*(     wy);
-                float w11 = (     wx)*(     wy);
-
-                int didx = (y*FR_IN_W + x)*3;
-                for (int c = 0; c < 3; ++c) {
-                  float v = fr_src_snapshot[idx00+c]*w00 +
-                            fr_src_snapshot[idx01+c]*w01 +
-                            fr_src_snapshot[idx10+c]*w10 +
-                            fr_src_snapshot[idx11+c]*w11;
-                  fr_in[didx+c] = v * 2.f - 1.f;  /* [-1..1] */
-                }
-              }
-            }
-          }
-
-          /* Quick stats on FR input (after crop/normalize) */
-          {
-            const int N = FR_IN_W * FR_IN_H * 3;
-            float mn =  1e30f, mx = -1e30f, sum = 0.f; int nan_cnt = 0;
-            for (int k = 0; k < N; ++k) {
-              float v = fr_in[k];
-              if (v != v) { nan_cnt++; continue; }
-              if (v < mn) mn = v;
-              if (v > mx) mx = v;
-              sum += v;
-            }
-            float mean = (N - nan_cnt) ? (sum / (float)(N - nan_cnt)) : 0.f;
-            printf("[FR-IN] det#%d stats: min=% .3f  max=% .3f  mean=% .3f  NaN=%d  size=%dx%dx3\r\n",
-                   di, mn, mx, mean, nan_cnt, FR_IN_W, FR_IN_H);
-          }
-
-          /* Cache clean before NPU reads FaceRec input */
-          DCACHE_Clean(fr_in, fr_in_len);
-
-          /* Run FaceRec */
-          uint32_t t0 = HAL_GetTick();
-          LL_ATON_DECLARE_NAMED_NN_INSTANCE_AND_INTERFACE(face_recognition);
-          uint32_t fr_ms = HAL_GetTick() - t0;
-
-          /* Invalidate output (embedding) then stats */
-          DCACHE_Invalidate(fr_emb, fr_out_len);
-          const int emb_dim = (int)(fr_out_len / (int)sizeof(float));
-          {
-            float mn =  1e30f, mx = -1e30f, sum = 0.f, l2 = 0.f; int nan_cnt = 0;
-            for (int k = 0; k < emb_dim; ++k) {
-              float v = fr_emb[k];
-              if (v != v) { nan_cnt++; continue; }
-              if (v < mn) mn = v;
-              if (v > mx) mx = v;
-              sum += v;
-              l2  += v*v;
-            }
-            float mean = (emb_dim - nan_cnt) ? (sum / (float)(emb_dim - nan_cnt)) : 0.f;
-            printf("[FR-OUT] det#%d emb[%d] stats: min=% .5f  max=% .5f  mean=% .5f  L2=%.5f  NaN=%d  t=%lums\r\n",
-                   di, emb_dim, mn, mx, mean, sqrtf(l2), nan_cnt, (unsigned long)fr_ms);
-          }
-
-          /* Cosine match to gallery + top-K print */
-          float best_sim = -2.f; int best_idx = -1;
-          const int TOPK = (g_ref_count < 3) ? g_ref_count : 3;
-          int top_idx[8]; float top_sim[8];
-          for (int t = 0; t < TOPK; ++t) { top_idx[t] = -1; top_sim[t] = -2.f; }
-
-          for (int gi = 0; gi < g_ref_count; ++gi) {
-            /* if your gallery is laid out as g_ref_emb[][FR_EMB_SIZE] */
-            float sim = cosine_similarity(fr_emb, &g_ref_emb[gi][0], emb_dim);
-            if (sim > best_sim) { best_sim = sim; best_idx = gi; }
-            /* maintain a small top-K list */
-            for (int t = 0; t < TOPK; ++t) {
-              if (sim > top_sim[t]) {
-                for (int s = TOPK-1; s > t; --s) { top_sim[s] = top_sim[s-1]; top_idx[s] = top_idx[s-1]; }
-                top_sim[t] = sim; top_idx[t] = gi; break;
-              }
-            }
-          }
-
-          /* Print top-K */
-          printf("[FR-OUT] det#%d top matches:", di);
-          for (int t = 0; t < TOPK; ++t) {
-            if (top_idx[t] >= 0)
-              printf("  %s(%.3f)", g_ref_name[top_idx[t]], top_sim[t]);
-          }
-          printf("\r\n");
-
-          /* Final decision */
-          if (best_idx >= 0 && best_sim >= FR_MATCH_THR) {
-            printf("[FR] det#%d RESULT: %s  (sim=%.3f >= thr=%.2f)\r\n",
-                   di, g_ref_name[best_idx], best_sim, FR_MATCH_THR);
-          } else {
-            printf("[FR] det#%d RESULT: Unknown  (best=%.3f < thr=%.2f)\r\n",
-                   di, best_sim, FR_MATCH_THR);
-          }
-        } /* for each detection */
+        /* read out (via shadow if aliased) & decide */
+        DCACHE_Invalidate(fr_out_ptr, fr_out_len);
+        if (fr_in == fr_out_ptr) {
+          memcpy(fr_out_shadow, fr_out_ptr, (fr_out_len < sizeof(fr_out_shadow)) ? fr_out_len : sizeof(fr_out_shadow));
+          fr_after_inference_and_decide(fr_out_shadow, (int)FR_EMB_SIZE, di);
+        } else {
+          fr_after_inference_and_decide((const int8_t*)fr_out_ptr, (int)fr_out_len, di);
+        }
       }
     }
     /* =========================================================== */
 
-
-
-
-
-
-
-    /* update display */
     ret = xSemaphoreTake(disp.lock, portMAX_DELAY);  assert(ret == pdTRUE);
     disp.info.nb_detect = pp_output.nb_detect;
     for (i = 0; i < pp_output.nb_detect; i++)
@@ -1425,17 +1361,14 @@ static void pp_thread_fct(void *arg)
       disp.info.tboxes_valid_nb++;
     }
 #endif
-    /* pp_ms here remains the time of detection postprocess only
-       (FaceRec time is not included). If you want to include FR time,
-       move nn_pp[1] to just before giving the token below. */
     disp.info.pp_ms = nn_pp[1] - nn_pp[0];
     ret = xSemaphoreGive(disp.lock);                 assert(ret == pdTRUE);
 
-    /* hand token back + wake display */
     bqueue_put_free(&nn_output_queue);
     xSemaphoreGive(disp.update);
   }
 }
+
 
 
 
@@ -1612,17 +1545,18 @@ static void xspi_quick_check(void)
 
 
 
+
 void app_run()
 {
-	  int inst = xspi_enable_mmap_auto();
-	  if (inst >= 0) {
-	    xspi_quick_check();  // should match your CubeProgrammer readback
-	  }
+  int inst = xspi_enable_mmap_auto();
+  if (inst >= 0) {
+    xspi_quick_check();  // should match your CubeProgrammer readback
+  }
 
   UBaseType_t isp_priority = FREERTOS_PRIORITY(2);
-  UBaseType_t pp_priority = FREERTOS_PRIORITY(-2);
-  UBaseType_t dp_priority = FREERTOS_PRIORITY(-2);
-  UBaseType_t nn_priority = FREERTOS_PRIORITY(1);
+  UBaseType_t pp_priority  = FREERTOS_PRIORITY(-2);
+  UBaseType_t dp_priority  = FREERTOS_PRIORITY(-2);
+  UBaseType_t nn_priority  = FREERTOS_PRIORITY(1);
   TaskHandle_t hdl;
   int ret;
 
@@ -1644,42 +1578,42 @@ void app_run()
   assert(ret == 0);
 
 #ifdef TRACKER_MODULE
-  ret = TRK_Init();
-  assert(ret == 0);
+  ret = TRK_Init();                                   assert(ret == 0);
   ret = BSP_PB_Init(BUTTON_TOGGLE_TRACKING, BUTTON_MODE_GPIO);
   assert(ret == BSP_ERROR_NONE);
 #endif
 
   cpuload_init(&cpu_load);
 
-  /*** Camera Init ************************************************************/  
+  /*** Camera Init ************************************************************/
   CAM_Init();
 
   /* sems + mutex init */
-  isp_sem = xSemaphoreCreateCountingStatic(1, 0, &isp_sem_buffer);
-  assert(isp_sem);
-  disp.update = xSemaphoreCreateCountingStatic(1, 0, &disp.update_buffer);
-  assert(disp.update);
-  disp.lock = xSemaphoreCreateMutexStatic(&disp.lock_buffer);
-  assert(disp.lock);
+  isp_sem     = xSemaphoreCreateCountingStatic(1, 0, &isp_sem_buffer);     assert(isp_sem);
+  disp.update = xSemaphoreCreateCountingStatic(1, 0, &disp.update_buffer); assert(disp.update);
+  disp.lock   = xSemaphoreCreateMutexStatic(&disp.lock_buffer);             assert(disp.lock);
+
+  /* === NEW: global NPU mutex + FR state === */
+  npu_guard_init();
+  fr_init();
 
   /* Start LCD Display camera pipe stream */
   CAM_DisplayPipe_Start(lcd_bg_buffer[0], CMW_MODE_CONTINUOUS);
 
   /* threads init */
-  hdl = xTaskCreateStatic(nn_thread_fct, "nn", configMINIMAL_STACK_SIZE * 2, NULL, nn_priority, nn_thread_stack,
-                          &nn_thread);
+  hdl = xTaskCreateStatic(nn_thread_fct, "nn",  configMINIMAL_STACK_SIZE * 2, NULL, nn_priority, nn_thread_stack, &nn_thread);
   assert(hdl != NULL);
-  hdl = xTaskCreateStatic(pp_thread_fct, "pp", configMINIMAL_STACK_SIZE * 2, NULL, pp_priority, pp_thread_stack,
-                          &pp_thread);
+  hdl = xTaskCreateStatic(pp_thread_fct, "pp",  configMINIMAL_STACK_SIZE * 2, NULL, pp_priority, pp_thread_stack, &pp_thread);
   assert(hdl != NULL);
-  hdl = xTaskCreateStatic(dp_thread_fct, "dp", configMINIMAL_STACK_SIZE * 2, NULL, dp_priority, dp_thread_stack,
-                          &dp_thread);
+  hdl = xTaskCreateStatic(dp_thread_fct, "dp",  configMINIMAL_STACK_SIZE * 2, NULL, dp_priority, dp_thread_stack, &dp_thread);
   assert(hdl != NULL);
-  hdl = xTaskCreateStatic(isp_thread_fct, "isp", configMINIMAL_STACK_SIZE * 2, NULL, isp_priority, isp_thread_stack,
-                          &isp_thread);
+  hdl = xTaskCreateStatic(isp_thread_fct, "isp",configMINIMAL_STACK_SIZE * 2, NULL, isp_priority, isp_thread_stack, &isp_thread);
   assert(hdl != NULL);
 }
+
+
+
+
 
 int CMW_CAMERA_PIPE_FrameEventCallback(uint32_t pipe)
 {
