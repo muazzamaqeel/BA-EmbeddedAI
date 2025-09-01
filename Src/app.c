@@ -44,6 +44,7 @@
 #include "tracker.h"
 #endif
 #include "utils.h"
+#include "face_recognition.h"
 
 #define FREERTOS_PRIORITY(p) ((UBaseType_t)((int)tskIDLE_PRIORITY + configMAX_PRIORITIES / 2 + (p)))
 
@@ -203,6 +204,8 @@ static uint8_t screen_buffer[LCD_BG_WIDTH * LCD_BG_HEIGHT * 2] ALIGN_32 IN_PSRAM
 
 /* model */
 LL_ATON_DECLARE_NAMED_NN_INSTANCE_AND_INTERFACE(Default);
+LL_ATON_DECLARE_NAMED_NN_INSTANCE_AND_INTERFACE(FaceRec);
+
  /* nn input buffers */
 /* Camera NN pipe delivers RGB888: 128*128*3 = 49,152 bytes */
 static uint8_t nn_input_buffers[2][NN_WIDTH * NN_HEIGHT * NN_BPP] ALIGN_32 IN_PSRAM;
@@ -949,6 +952,133 @@ static int app_tracking(od_pp_out_t *pp)
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// [ADD - FaceRec constants]
+#define FR_IN_W 112
+#define FR_IN_H 112
+#define FR_EMB_SIZE 512
+#define FR_MATCH_THR 0.80f  // cosine similarity threshold (tune as you like)
+
+// [ADD - your enrollment database]
+// Fill these with your real 512-D embeddings (captured offline) and matching names.
+static const float g_ref_emb[][FR_EMB_SIZE] = {
+  /* Example: paste your real vectors here */
+  // { /* 512 floats */ },
+  // { /* 512 floats */ },
+};
+static const char *g_ref_name[] = {
+  // "Alice",
+  // "Bob",
+};
+static const int g_ref_count = (int)(sizeof(g_ref_name)/sizeof(g_ref_name[0]));
+
+// [ADD - cosine similarity]
+static float cosine_similarity(const float *a, const float *b, int n)
+{
+  float dot=0.f, na=0.f, nb=0.f;
+  for (int i=0;i<n;i++) { float va=a[i], vb=b[i]; dot+=va*vb; na+=va*va; nb+=vb*vb; }
+  float den = sqrtf(na)*sqrtf(nb) + 1e-6f;
+  return dot / den;
+}
+
+// [ADD - clamp utility]
+static inline int clampi(int v, int lo, int hi){ return (v<lo)?lo:((v>hi)?hi:v); }
+
+// [ADD - crop+resize (bilinear) from detector input FP32 NHWC → FaceRec FP32 NHWC 112x112
+// src: FP32 NHWC in [0..1], size NN_WIDTH x NN_HEIGHT x 3
+// roi: od_pp_outBuffer_t (normalized cx,cy,w,h in [0..1])
+// dst: FP32 NHWC, 112x112x3, normalized to [-1..1] as MobileFaceNet typically expects
+static void crop_to_facerec_input_from_detector_input(
+    const float *src_nhwc, int src_w, int src_h,
+    const od_pp_outBuffer_t *roi,
+    float *dst_nhwc, int dst_w, int dst_h)
+{
+  // Make square box with some margin
+  float cx = roi->x_center * src_w;
+  float cy = roi->y_center * src_h;
+  float bw = roi->width  * src_w;
+  float bh = roi->height * src_h;
+  float side = fmaxf(bw, bh) * 1.10f;  // +10% margin
+  float x0 = cx - side * 0.5f;
+  float y0 = cy - side * 0.5f;
+  float x1 = cx + side * 0.5f;
+  float y1 = cy + side * 0.5f;
+
+  // Bilinear sampling
+  const float sx_scale = (x1 - x0) / (float)dst_w;
+  const float sy_scale = (y1 - y0) / (float)dst_h;
+
+  for (int y=0; y<dst_h; ++y) {
+    float sy = y0 + (y + 0.5f) * sy_scale;
+    int sy0 = (int)floorf(sy);
+    int sy1 = sy0 + 1;
+    float wy = sy - (float)sy0;
+    sy0 = clampi(sy0, 0, src_h-1);
+    sy1 = clampi(sy1, 0, src_h-1);
+
+    for (int x=0; x<dst_w; ++x) {
+      float sx = x0 + (x + 0.5f) * sx_scale;
+      int sx0 = (int)floorf(sx);
+      int sx1 = sx0 + 1;
+      float wx = sx - (float)sx0;
+      sx0 = clampi(sx0, 0, src_w-1);
+      sx1 = clampi(sx1, 0, src_w-1);
+
+      // sample 4 neighbors, NHWC
+      int idx00 = (sy0*src_w + sx0)*3;
+      int idx01 = (sy0*src_w + sx1)*3;
+      int idx10 = (sy1*src_w + sx0)*3;
+      int idx11 = (sy1*src_w + sx1)*3;
+
+      float w00 = (1.f-wx)*(1.f-wy);
+      float w01 = (     wx)*(1.f-wy);
+      float w10 = (1.f-wx)*(     wy);
+      float w11 = (     wx)*(     wy);
+
+      int didx = (y*dst_w + x)*3;
+      for (int c=0;c<3;c++){
+        float v = src_nhwc[idx00+c]*w00 +
+                  src_nhwc[idx01+c]*w01 +
+                  src_nhwc[idx10+c]*w10 +
+                  src_nhwc[idx11+c]*w11;
+        // src is [0..1], convert to [-1..1] for most FR backbones:
+        dst_nhwc[didx+c] = v*2.f - 1.f;
+      }
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
 static void pp_thread_fct(void *arg)
 {
 #if POSTPROCESS_TYPE == POSTPROCESS_OD_YOLO_V2_UF
@@ -995,6 +1125,7 @@ static void pp_thread_fct(void *arg)
   const uint32_t PRINT_RESULT_EVERY_MS = 250;
   uint32_t last_blob_print   = 0;
   uint32_t last_result_print = 0;
+
 
   while (1)
   {
@@ -1063,7 +1194,7 @@ static void pp_thread_fct(void *arg)
       }
     }
 
-    /* run postprocess */
+    /* run postprocess (dets) */
     pp_output.pOutBuff  = NULL;
     pp_output.nb_detect = 0;
 
@@ -1092,6 +1223,193 @@ static void pp_thread_fct(void *arg)
       }
     }
 
+
+
+
+    /* ===================== FACE RECOGNITION ===================== */
+    {
+      /* If no detections, FR won’t run; log once per frame why. */
+      if (pp_output.nb_detect == 0) {
+        // nothing to recognize; keep PP log above
+      } else if (g_ref_count == 0) {
+        printf("[FR] Gallery empty -> skip face recognition (have %ld detections)\r\n",
+               (long)pp_output.nb_detect);
+      } else {
+        /* 1) Detector input tensor used for this inference (FP32 NHWC [0..1]) */
+        const LL_Buffer_InfoTypeDef *det_in_info = LL_ATON_Input_Buffers_Info_Default();
+        const float *det_in_nhwc = (const float*)LL_Buffer_addr_start(&det_in_info[0]);
+        const int det_in_w = NN_WIDTH;
+        const int det_in_h = NN_HEIGHT;
+
+        /* 2) FaceRec input/output buffers */
+        const LL_Buffer_InfoTypeDef *fr_in_info  = LL_ATON_Input_Buffers_Info_FaceRec();
+        float    *fr_in     = (float*)   LL_Buffer_addr_start(&fr_in_info[0]);
+        uint32_t  fr_in_len =            LL_Buffer_len(&fr_in_info[0]);
+
+        const LL_Buffer_InfoTypeDef *fr_out_info = LL_ATON_Output_Buffers_Info_FaceRec();
+        float    *fr_emb     = (float*)  LL_Buffer_addr_start(&fr_out_info[0]);
+        uint32_t  fr_out_len =           LL_Buffer_len(&fr_out_info[0]);
+
+        /* Expected sizes (for sanity logs only) */
+        const uint32_t fr_in_len_expect  = (uint32_t)(FR_IN_W * FR_IN_H * 3u * sizeof(float));
+        const uint32_t fr_out_len_expect = (uint32_t)(FR_EMB_SIZE * sizeof(float));
+        printf("[FR] buffers: in@%p len=%lu (exp=%lu)  out@%p len=%lu (exp=%lu)  det_in@%p %dx%d\r\n",
+               (void*)fr_in,   (unsigned long)fr_in_len,  (unsigned long)fr_in_len_expect,
+               (void*)fr_emb,  (unsigned long)fr_out_len, (unsigned long)fr_out_len_expect,
+               (const void*)det_in_nhwc, det_in_w, det_in_h);
+
+        /* Snapshot the detector input to avoid races with the next frame */
+        static float fr_src_snapshot[NN_WIDTH * NN_HEIGHT * 3];
+        memcpy(fr_src_snapshot, det_in_nhwc, sizeof(fr_src_snapshot));
+
+        /* For each detection: crop->resize->normalize -> FaceRec -> cosine match */
+        for (int di = 0; di < (int)pp_output.nb_detect; ++di) {
+          const od_pp_outBuffer_t *d = &pp_output.pOutBuff[di];
+
+          /* Log the ROI as pixels + normalized */
+          float cx_px = d->x_center * det_in_w;
+          float cy_px = d->y_center * det_in_h;
+          float w_px  = d->width    * det_in_w;
+          float h_px  = d->height   * det_in_h;
+          printf("[FR-IN] det#%d ROI: cx=%.1f(%0.3f) cy=%.1f(%0.3f) w=%.1f(%0.3f) h=%.1f(%0.3f) conf=%.3f\r\n",
+                 di, cx_px, d->x_center, cy_px, d->y_center, w_px, d->width, h_px, d->height, d->conf);
+
+          /* --- Crop+Resize from snapshot (FP32 NHWC, [0..1]) to FaceRec input (FP32 NHWC, [-1..1]) --- */
+          {
+            float cx = cx_px;
+            float cy = cy_px;
+            float side = fmaxf(w_px, h_px) * 1.10f;  /* margin */
+            float x0 = cx - side * 0.5f;
+            float y0 = cy - side * 0.5f;
+            float sx_scale = side / (float)FR_IN_W;
+            float sy_scale = side / (float)FR_IN_H;
+
+            for (int y = 0; y < FR_IN_H; ++y) {
+              float sy = y0 + (y + 0.5f) * sy_scale;
+              int sy0 = (int)floorf(sy);
+              int sy1 = sy0 + 1;
+              float wy = sy - (float)sy0;
+              if (sy0 < 0) sy0 = 0; if (sy0 >= det_in_h) sy0 = det_in_h-1;
+              if (sy1 < 0) sy1 = 0; if (sy1 >= det_in_h) sy1 = det_in_h-1;
+
+              for (int x = 0; x < FR_IN_W; ++x) {
+                float sx = x0 + (x + 0.5f) * sx_scale;
+                int sx0 = (int)floorf(sx);
+                int sx1 = sx0 + 1;
+                float wx = sx - (float)sx0;
+                if (sx0 < 0) sx0 = 0; if (sx0 >= det_in_w) sx0 = det_in_w-1;
+                if (sx1 < 0) sx1 = 0; if (sx1 >= det_in_w) sx1 = det_in_w-1;
+
+                int idx00 = (sy0*det_in_w + sx0)*3;
+                int idx01 = (sy0*det_in_w + sx1)*3;
+                int idx10 = (sy1*det_in_w + sx0)*3;
+                int idx11 = (sy1*det_in_w + sx1)*3;
+
+                float w00 = (1.f-wx)*(1.f-wy);
+                float w01 = (     wx)*(1.f-wy);
+                float w10 = (1.f-wx)*(     wy);
+                float w11 = (     wx)*(     wy);
+
+                int didx = (y*FR_IN_W + x)*3;
+                for (int c = 0; c < 3; ++c) {
+                  float v = fr_src_snapshot[idx00+c]*w00 +
+                            fr_src_snapshot[idx01+c]*w01 +
+                            fr_src_snapshot[idx10+c]*w10 +
+                            fr_src_snapshot[idx11+c]*w11;
+                  fr_in[didx+c] = v * 2.f - 1.f;  /* [-1..1] */
+                }
+              }
+            }
+          }
+
+          /* Quick stats on FR input (after crop/normalize) */
+          {
+            const int N = FR_IN_W * FR_IN_H * 3;
+            float mn =  1e30f, mx = -1e30f, sum = 0.f; int nan_cnt = 0;
+            for (int k = 0; k < N; ++k) {
+              float v = fr_in[k];
+              if (v != v) { nan_cnt++; continue; }
+              if (v < mn) mn = v;
+              if (v > mx) mx = v;
+              sum += v;
+            }
+            float mean = (N - nan_cnt) ? (sum / (float)(N - nan_cnt)) : 0.f;
+            printf("[FR-IN] det#%d stats: min=% .3f  max=% .3f  mean=% .3f  NaN=%d  size=%dx%dx3\r\n",
+                   di, mn, mx, mean, nan_cnt, FR_IN_W, FR_IN_H);
+          }
+
+          /* Cache clean before NPU reads FaceRec input */
+          DCACHE_Clean(fr_in, fr_in_len);
+
+          /* Run FaceRec */
+          uint32_t t0 = HAL_GetTick();
+          LL_ATON_RT_Main(&NN_Instance_FaceRec);
+          uint32_t fr_ms = HAL_GetTick() - t0;
+
+          /* Invalidate output (embedding) then stats */
+          DCACHE_Invalidate(fr_emb, fr_out_len);
+          const int emb_dim = (int)(fr_out_len / (int)sizeof(float));
+          {
+            float mn =  1e30f, mx = -1e30f, sum = 0.f, l2 = 0.f; int nan_cnt = 0;
+            for (int k = 0; k < emb_dim; ++k) {
+              float v = fr_emb[k];
+              if (v != v) { nan_cnt++; continue; }
+              if (v < mn) mn = v;
+              if (v > mx) mx = v;
+              sum += v;
+              l2  += v*v;
+            }
+            float mean = (emb_dim - nan_cnt) ? (sum / (float)(emb_dim - nan_cnt)) : 0.f;
+            printf("[FR-OUT] det#%d emb[%d] stats: min=% .5f  max=% .5f  mean=% .5f  L2=%.5f  NaN=%d  t=%lums\r\n",
+                   di, emb_dim, mn, mx, mean, sqrtf(l2), nan_cnt, (unsigned long)fr_ms);
+          }
+
+          /* Cosine match to gallery + top-K print */
+          float best_sim = -2.f; int best_idx = -1;
+          const int TOPK = (g_ref_count < 3) ? g_ref_count : 3;
+          int top_idx[8]; float top_sim[8];
+          for (int t = 0; t < TOPK; ++t) { top_idx[t] = -1; top_sim[t] = -2.f; }
+
+          for (int gi = 0; gi < g_ref_count; ++gi) {
+            /* if your gallery is laid out as g_ref_emb[][FR_EMB_SIZE] */
+            float sim = cosine_similarity(fr_emb, &g_ref_emb[gi][0], emb_dim);
+            if (sim > best_sim) { best_sim = sim; best_idx = gi; }
+            /* maintain a small top-K list */
+            for (int t = 0; t < TOPK; ++t) {
+              if (sim > top_sim[t]) {
+                for (int s = TOPK-1; s > t; --s) { top_sim[s] = top_sim[s-1]; top_idx[s] = top_idx[s-1]; }
+                top_sim[t] = sim; top_idx[t] = gi; break;
+              }
+            }
+          }
+
+          /* Print top-K */
+          printf("[FR-OUT] det#%d top matches:", di);
+          for (int t = 0; t < TOPK; ++t) {
+            if (top_idx[t] >= 0)
+              printf("  %s(%.3f)", g_ref_name[top_idx[t]], top_sim[t]);
+          }
+          printf("\r\n");
+
+          /* Final decision */
+          if (best_idx >= 0 && best_sim >= FR_MATCH_THR) {
+            printf("[FR] det#%d RESULT: %s  (sim=%.3f >= thr=%.2f)\r\n",
+                   di, g_ref_name[best_idx], best_sim, FR_MATCH_THR);
+          } else {
+            printf("[FR] det#%d RESULT: Unknown  (best=%.3f < thr=%.2f)\r\n",
+                   di, best_sim, FR_MATCH_THR);
+          }
+        } /* for each detection */
+      }
+    }
+    /* =========================================================== */
+
+
+
+
+
+
+
     /* update display */
     ret = xSemaphoreTake(disp.lock, portMAX_DELAY);  assert(ret == pdTRUE);
     disp.info.nb_detect = pp_output.nb_detect;
@@ -1106,6 +1424,9 @@ static void pp_thread_fct(void *arg)
       disp.info.tboxes_valid_nb++;
     }
 #endif
+    /* pp_ms here remains the time of detection postprocess only
+       (FaceRec time is not included). If you want to include FR time,
+       move nn_pp[1] to just before giving the token below. */
     disp.info.pp_ms = nn_pp[1] - nn_pp[0];
     ret = xSemaphoreGive(disp.lock);                 assert(ret == pdTRUE);
 
@@ -1114,6 +1435,8 @@ static void pp_thread_fct(void *arg)
     xSemaphoreGive(disp.update);
   }
 }
+
+
 
 
 

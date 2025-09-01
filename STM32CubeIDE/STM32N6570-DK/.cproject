@@ -147,7 +147,7 @@
 									<listOptionValue builtIn="false" value="c"/>
 									<listOptionValue builtIn="false" value="m"/>
 									<listOptionValue builtIn="false" value="nosys"/>
-									<listOptionValue builtIn="false" value=":NetworkRuntime1010_CM55_GCC.a"/>
+									<listOptionValue builtIn="false" value=":NetworkRuntime1020_CM55_GCC.a"/>
 									<listOptionValue builtIn="false" value="n6-evision-awb_gcc"/>
 									<listOptionValue builtIn="false" value="n6-evision-st-ae_gcc"/>
 								</option>
@@ -179,7 +179,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="Lib/ai-postprocessing-wrapper/app_postprocess_od_st_yolox_uf.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+						<entry excluding="Lib/AI_Runtime/Npu/ll_aton/ll_aton_osal_rtos_template.c|Lib/ai-postprocessing-wrapper/app_postprocess_od_st_yolox_uf.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
