@@ -5,6 +5,17 @@
 #include <stdio.h>
 #include "stm32n6xx_hal.h"
 
+/* ---------- forward-static prototypes (avoid implicit decls) ---------- */
+static void  fr_l2_normalize(float *v, int n);
+static float cosine_similarity(const float *a, const float *b, int n);
+static void  fr_add_sample_normed_copy(const float *emb, int n);
+static void  fr_finalize_enrollment(int n);
+static float g_last_sim = -1.f;
+static int   g_last_is_match = 0;
+
+/* ---------- utilities ---------- */
+static inline int clampi(int v, int lo, int hi){ return (v<lo)?lo:((v>hi)?hi:v); }
+
 /* ===== snapshot of detector input (NHWC FP32 [0..1]) ===== */
 static float g_last_frame[NN_WIDTH * NN_HEIGHT * 3];
 
@@ -13,82 +24,28 @@ static float g_last_frame[NN_WIDTH * NN_HEIGHT * 3];
 
 static float g_me_samples[FR_SAMPLES_TARGET][FR_EMB_SIZE];
 static float g_me_centroid[FR_EMB_SIZE];
-static int   g_me_count       = 0;
-static int   g_enroll_done    = 0;
+static int   g_me_count    = 0;
+static int   g_enroll_done = 0;
 
 /* runtime-configurable match threshold & per-detection enroll gate */
 static float g_match_thr   = FR_DEFAULT_MATCH_THR;
 static int   g_enroll_gate = 1;  /* set per detection by fr_set_enroll_gate() */
 
-/* (optional) small gallery for 1:N (paste yours if you want) */
-static const float g_ref_emb[][FR_EMB_SIZE] = {
-  /* {512 floats}, ... */
-};
-static const char *g_ref_name[] = {
-  /* "Alice", "Bob" */
-};
-static const int g_ref_count = (int)(sizeof(g_ref_name)/sizeof(g_ref_name[0]));
-
-/* ---------- utils ---------- */
-static inline int clampi(int v, int lo, int hi){ return (v<lo)?lo:((v>hi)?hi:v); }
-
-static void fr_l2_normalize(float *v, int n)
-{
-  float s = 0.f; for (int i=0;i<n;i++) s += v[i]*v[i];
-  float inv = 1.0f / (sqrtf(s) + 1e-9f);
-  for (int i=0;i<n;i++) v[i] *= inv;
-}
-
-static float cosine_similarity(const float *a, const float *b, int n)
-{
-  float dot=0.f, na=0.f, nb=0.f;
-  for (int i=0;i<n;i++){ float va=a[i], vb=b[i]; dot+=va*vb; na+=va*va; nb+=vb*vb; }
-  float den = sqrtf(na)*sqrtf(nb) + 1e-6f;
-  return dot / den;
-}
-
-static void fr_add_sample_normed_copy(const float *emb, int n)
-{
-  float *dst = g_me_samples[g_me_count];
-  for (int i=0;i<n;i++) dst[i] = emb[i];
-  fr_l2_normalize(dst, n);
-  g_me_count++;
-  printf("[ENROLL] stored sample %d/%d\r\n", g_me_count, FR_SAMPLES_TARGET);
-}
-
-static void fr_finalize_enrollment(int n)
-{
-  for (int i=0;i<n;i++) g_me_centroid[i] = 0.f;
-  for (int k=0;k<g_me_count;k++)
-    for (int i=0;i<n;i++)
-      g_me_centroid[i] += g_me_samples[k][i];
-  float inv = 1.0f / (float)g_me_count;
-  for (int i=0;i<n;i++) g_me_centroid[i] *= inv;
-  fr_l2_normalize(g_me_centroid, n);
-  g_enroll_done = 1;
-  printf("[ENROLL] completed with %d samples. Centroid ready.\r\n", g_me_count);
-}
-
-/* ---------- runtime config ---------- */
-void fr_set_match_threshold(float thr) { g_match_thr = thr; }
-void fr_set_enroll_gate(int ok)        { g_enroll_gate = ok; }
-
-void fr_reset_enrollment(void)
-{
-  memset(g_me_samples, 0, sizeof(g_me_samples));
-  memset(g_me_centroid, 0, sizeof(g_me_centroid));
-  g_me_count    = 0;
-  g_enroll_done = 0;
-  printf("[ENROLL] reset. Need %d fresh samples.\r\n", FR_SAMPLES_TARGET);
-}
+/* (optional) small gallery for 1:N — keep empty unless you paste refs */
+static const float g_ref_emb[][FR_EMB_SIZE] = { /* {128 floats}, ... */ };
+static const char *g_ref_name[] = { /* "Alice", "Bob" */ };
+static const int   g_ref_count = (int)(sizeof(g_ref_name)/sizeof(g_ref_name[0]));
 
 /* ---------- API ---------- */
 void fr_init(void)
 {
   memset(g_last_frame, 0, sizeof(g_last_frame));
-  fr_reset_enrollment();
-  g_match_thr   = FR_DEFAULT_MATCH_THR;
-  g_enroll_gate = 1;
+  memset(g_me_samples, 0, sizeof(g_me_samples));
+  memset(g_me_centroid, 0, sizeof(g_me_centroid));
+  g_me_count     = 0;
+  g_enroll_done  = 0;
+  g_match_thr    = FR_DEFAULT_MATCH_THR;
+  g_enroll_gate  = 1;
 
   printf("[FR][CFG] subject=\"%s\" match_thr=%.2f  enroll: conf>=%.2f  minSide>=%.2f  centerTol<=%.2f\r\n",
          FR_SUBJECT_NAME, g_match_thr, FR_ENROLL_CONF_MIN, FR_ENROLL_MIN_SIDE, FR_ENROLL_CENTER_TOL);
@@ -162,13 +119,13 @@ void fr_prepare_input_for_det(const od_pp_outBuffer_t *d,
 
   uint32_t t1 = HAL_GetTick();
 
-  /* quick stats & timing */
+  /* quick stats & timing (kept; useful to spot NaNs) */
   {
     const int N = fr_w * fr_h * 3;
     float mn =  1e30f, mx = -1e30f, sum = 0.f; int nan_cnt = 0;
     for (int k = 0; k < N; ++k) {
       float v = fr_in[k];
-      if (v != v) { nan_cnt++; continue; }
+      if (!(v == v)) { nan_cnt++; continue; }
       if (v < mn) mn = v;
       if (v > mx) mx = v;
       sum += v;
@@ -180,71 +137,104 @@ void fr_prepare_input_for_det(const od_pp_outBuffer_t *d,
   }
 }
 
-void fr_after_inference_and_decide(const int8_t *emb_q, int emb_len, int det_idx)
+/* Single, final definition — minimal verdict logging */
+void fr_after_inference_and_decide(const float *emb_in, int emb_len, int det_idx)
 {
-  /* int8 -> float in [-1..1] (adjust if your scale differs) */
+  (void)det_idx;  /* keep logs minimal */
   static float emb_f[FR_EMB_SIZE];
   int n = (emb_len < FR_EMB_SIZE) ? emb_len : FR_EMB_SIZE;
 
-  float mn =  1e30f, mx = -1e30f, sum = 0.f, l2 = 0.f;
-  for (int i=0;i<n;i++) {
-    emb_f[i] = (float)emb_q[i] / 128.0f;
-    float v = emb_f[i];
-    if (v < mn) mn = v;
-    if (v > mx) mx = v;
-    sum += v;
-    l2  += v*v;
-  }
-  float mean = (n > 0) ? (sum / (float)n) : 0.f;
-  printf("[FR-OUT] det#%d emb%d (int8->f): min=% .5f max=% .5f mean=% .5f L2=%.5f\r\n",
-         det_idx, n, mn, mx, mean, sqrtf(l2));
+  for (int i=0;i<n;i++) emb_f[i] = emb_in[i];
+  fr_l2_normalize(emb_f, n);
 
-  /* Enrollment then match */
+  /* Enrollment first (gated by pp-thread via fr_set_enroll_gate) */
   if (!g_enroll_done) {
-    if (!g_enroll_gate) {
-      printf("[ENROLL] skipped this detection (gate=0)\r\n");
-      return;
-    }
+    if (!g_enroll_gate) return;  /* pp thread hasn’t opened the window yet */
     fr_add_sample_normed_copy(emb_f, n);
     if (g_me_count >= FR_SAMPLES_TARGET) {
       fr_finalize_enrollment(n);
-    } else {
-      printf("[ENROLL] waiting for %d more sample(s)...\r\n",
-             FR_SAMPLES_TARGET - g_me_count);
+      printf("[ENROLL] %s enrolled.\r\n", FR_SUBJECT_NAME);
     }
     return;
   }
 
-  /* Compare to centroid (subject) */
+  /* Runtime verdict — minimal line only */
   float sim_me = cosine_similarity(emb_f, g_me_centroid, n);
-  printf("[FR] det#%d %s? sim=%.3f (thr=%.2f) -> %s\r\n",
-         det_idx, FR_SUBJECT_NAME, sim_me, g_match_thr,
-         (sim_me >= g_match_thr) ? "YES" : "NO");
+  g_last_sim = sim_me;
+  g_last_is_match = (sim_me >= g_match_thr);
+
   if (sim_me >= g_match_thr) {
-    printf(">>> %s FACE FOUND (sim=%.3f >= thr=%.2f)\r\n", FR_SUBJECT_NAME, sim_me, g_match_thr);
+    printf("[FR] %s found (sim=%.3f)\r\n", FR_SUBJECT_NAME, sim_me);
   } else {
-    printf(">>> WRONG FACE FOUND (sim=%.3f < thr=%.2f)\r\n", sim_me, g_match_thr);
+    printf("[FR] %s not found (sim=%.3f)\r\n", FR_SUBJECT_NAME, sim_me);
   }
 
-  /* Optional 1:N gallery */
-  if (g_ref_count > 0) {
-    int   best_idx = -1;
-    float best_sim = -2.0f;
-    for (int r = 0; r < g_ref_count; ++r) {
-      float s = cosine_similarity(emb_f, g_ref_emb[r], n);
-      if (s > best_sim) { best_sim = s; best_idx = r; }
-    }
-    if (best_idx >= 0) {
-      printf("[FR] det#%d gallery best: %s (sim=%.3f)\r\n",
-             det_idx, g_ref_name[best_idx], best_sim);
-    }
+  /* Optional small 1:N gallery kept silent by default. */
+}
+
+/* ---------- runtime config / state ---------- */
+int  fr_is_enrolled(void)               { return g_enroll_done; }
+int fr_get_last_match(float *sim_out)
+{
+  if (sim_out) *sim_out = g_last_sim;
+  return g_last_is_match;
+}
+
+void fr_set_match_threshold(float thr)  { g_match_thr = thr; }
+void fr_set_enroll_gate(int ok)         { g_enroll_gate = ok; }
+void fr_reset_enrollment(void)
+{
+  memset(g_me_samples, 0, sizeof(g_me_samples));
+  memset(g_me_centroid, 0, sizeof(g_me_centroid));
+  g_me_count    = 0;
+  g_enroll_done = 0;
+  printf("[ENROLL] reset. Need %d fresh samples.\r\n", FR_SAMPLES_TARGET);
+}
+
+/* Safety: warn once if FR input & output alias the same address */
+void fr_check_alias(const void *in_ptr, const void *out_ptr)
+{
+  static int warned = 0;
+  if (in_ptr == out_ptr && !warned) {
+    warned = 1;
+    printf("[FR][WARN] IN and OUT alias — using shadow copy is safe, but prefer re-export with separate I/O.\r\n");
   }
 }
 
-void fr_check_alias(const void *in_ptr, const void *out_ptr)
+/* ---------- static helpers (after prototypes) ---------- */
+static void fr_l2_normalize(float *v, int n)
 {
-  if (in_ptr == out_ptr) {
-    printf("[FR][WARN] INPUT and OUTPUT share the same address (%p) — this can corrupt data!\r\n",
-           in_ptr);
-  }
+  float s = 0.f; for (int i=0;i<n;i++) s += v[i]*v[i];
+  float inv = 1.0f / (sqrtf(s) + 1e-9f);
+  for (int i=0;i<n;i++) v[i] *= inv;
+}
+
+static float cosine_similarity(const float *a, const float *b, int n)
+{
+  float dot=0.f, na=0.f, nb=0.f;
+  for (int i=0;i<n;i++){ float va=a[i], vb=b[i]; dot+=va*vb; na+=va*va; nb+=vb*vb; }
+  float den = sqrtf(na)*sqrtf(nb) + 1e-6f;
+  return dot / den;
+}
+
+static void fr_add_sample_normed_copy(const float *emb, int n)
+{
+  float *dst = g_me_samples[g_me_count];
+  for (int i=0;i<n;i++) dst[i] = emb[i];
+  fr_l2_normalize(dst, n);
+  g_me_count++;
+  printf("[ENROLL] stored sample %d/%d\r\n", g_me_count, FR_SAMPLES_TARGET);
+}
+
+static void fr_finalize_enrollment(int n)
+{
+  for (int i=0;i<n;i++) g_me_centroid[i] = 0.f;
+  for (int k=0;k<g_me_count;k++)
+    for (int i=0;i<n;i++)
+      g_me_centroid[i] += g_me_samples[k][i];
+  float inv = 1.0f / (float)g_me_count;
+  for (int i=0;i<n;i++) g_me_centroid[i] *= inv;
+  fr_l2_normalize(g_me_centroid, n);
+  g_enroll_done = 1;
+  printf("[ENROLL] completed with %d samples. Centroid ready.\r\n", g_me_count);
 }

@@ -50,9 +50,13 @@ static void IAC_Config();
 static void CONSOLE_Config(void);
 static int main_freertos(void);
 static void main_thread_fct(void *arg);
+void Error_Handler(void);
 
 /* This is defined in port.c */
 void vPortSetupTimerInterrupt(void);
+
+
+// --- XSPI1 HyperRAM: enable memory-mapped window @ 0x9000_0000 .. 0x90FF_FFFF
 
 /**
   * @brief  Main program
@@ -325,14 +329,27 @@ static void main_thread_fct(void *arg)
   NPUCache_config();
 
 #ifdef STM32N6570_DK_REV
-  /*** External RAM and NOR Flash *********************************************/
-  BSP_XSPI_RAM_Init(0);
-  BSP_XSPI_RAM_EnableMemoryMappedMode(0);
+  /*** External RAM (HyperRAM on XSPI1) *****************************************/
+  {
+    int32_t st;
+    st = BSP_XSPI_RAM_Init(0);                     // <-- CORRECT 1-arg signature
+    if (st != BSP_ERROR_NONE) {
+      printf("XSPI1 HyperRAM init failed: %ld\r\n", (long)st);
+      Error_Handler();
+    }
+    st = BSP_XSPI_RAM_EnableMemoryMappedMode(0);
+    if (st != BSP_ERROR_NONE) {
+      printf("XSPI1 HyperRAM MMAP enable failed: %ld\r\n", (long)st);
+      Error_Handler();
+    }
+    printf("XSPI1 HyperRAM mapped @ 0x90000000..0x90FFFFFF\r\n");
+  }
 #endif
 
+  /*** External NOR (weights on XSPI2) ******************************************/
   BSP_XSPI_NOR_Init_t NOR_Init;
   NOR_Init.InterfaceMode = BSP_XSPI_NOR_OPI_MODE;
-  NOR_Init.TransferRate = BSP_XSPI_NOR_DTR_TRANSFER;
+  NOR_Init.TransferRate  = BSP_XSPI_NOR_DTR_TRANSFER;
   BSP_XSPI_NOR_Init(0, &NOR_Init);
   BSP_XSPI_NOR_EnableMemoryMappedMode(0);
 
@@ -401,6 +418,20 @@ void HAL_CACHEAXI_MspDeInit(CACHEAXI_HandleTypeDef *hcacheaxi)
   __HAL_RCC_CACHEAXI_CLK_DISABLE();
   __HAL_RCC_CACHEAXI_FORCE_RESET();
 }
+
+
+void Error_Handler(void)
+{
+  __disable_irq();
+  printf("Error_Handler() called — halting.\r\n");
+#ifdef DEBUG
+  __BKPT(0);  /* trap once if a debugger is attached */
+#endif
+  while (1) {
+    /* Optionally blink a LED here */
+  }
+}
+
 
 #ifdef  USE_FULL_ASSERT
 
