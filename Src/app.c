@@ -1175,6 +1175,14 @@ static inline float iou_norm_boxes(const od_pp_outBuffer_t *a, const od_pp_outBu
 
 
 
+
+
+
+
+
+
+
+
 static void pp_thread_fct(void *arg)
 {
 #if POSTPROCESS_TYPE == POSTPROCESS_OD_YOLO_V2_UF
@@ -1226,20 +1234,24 @@ static void pp_thread_fct(void *arg)
   } primary_t;
 
   static primary_t primary = {0};
-  static uint32_t last_blob_print = 0;
-  static uint32_t last_countdown_log = 0;
-  static uint32_t last_fr_ms = 0;
+
+  static uint32_t last_blob_print     = 0;
+  static uint32_t last_countdown_log  = 0;
+  static uint32_t last_fr_ms          = 0;
+
+  /* NEW: one-shot enrollment countdown latch */
+  static int      enroll_countdown_done = 0;    /* 0 = not yet done; 1 = done forever until reboot */
 
   /* knobs */
-  const float   SCORE_SIDE_REF     = 0.35f; /* prefer larger faces */
-  const float   CENTER_TOL         = 0.60f; /* radial tolerance when picking best */
-  const float   ACCEPT_CONF_MIN    = 0.60f; /* gate noisy boxes */
-  const float   ACCEPT_SIDE_MIN    = 0.20f; /* gate tiny boxes */
-  const float   STABLE_IOU_MIN     = 0.30f; /* keep same primary when IoU ≥ this */
-  const int     HOLD_MISS_FRAMES   = 6;     /* keep box for a few missed frames */
-  const float   EMA_ALPHA          = 0.70f; /* smoothing of cx,cy,w,h */
-  const uint32_t ENROLL_DWELL_MS   = 10000; /* 10 s */
-  const uint32_t FR_THROTTLE_MS    = 250;   /* run FR at most every 250ms */
+  const float     SCORE_SIDE_REF     = 0.35f; /* prefer larger faces */
+  const float     CENTER_TOL         = 0.60f; /* radial tolerance when picking best */
+  const float     ACCEPT_CONF_MIN    = 0.60f; /* gate noisy boxes */
+  const float     ACCEPT_SIDE_MIN    = 0.20f; /* gate tiny boxes */
+  const float     STABLE_IOU_MIN     = 0.30f; /* keep same primary when IoU ≥ this */
+  const int       HOLD_MISS_FRAMES   = 6;     /* keep box for a few missed frames */
+  const float     EMA_ALPHA          = 0.70f; /* smoothing of cx,cy,w,h */
+  const uint32_t  ENROLL_DWELL_MS    = 10000; /* 10 s */
+  const uint32_t  FR_THROTTLE_MS     = 250;   /* run FR at most every 250ms */
 
   while (1)
   {
@@ -1254,8 +1266,8 @@ static void pp_thread_fct(void *arg)
 
     /* Throttled raw-blob stats (optional) */
     {
-      uint32_t now = HAL_GetTick();
-      if ((now - last_blob_print) >= 600U) {
+      uint32_t now_stats = HAL_GetTick();
+      if ((now_stats - last_blob_print) >= 600U) {
         for (int j = 0; j < NN_OUT_NB; ++j) {
           int nf = (int)(pp_len[j] / (uint32_t)sizeof(float));
           const float *p = (const float*)pp_input[j];
@@ -1274,7 +1286,7 @@ static void pp_thread_fct(void *arg)
                    j, nf, minv, maxv, mean, nz);
           }
         }
-        last_blob_print = now;
+        last_blob_print = now_stats;
       }
     }
 
@@ -1378,49 +1390,55 @@ static void pp_thread_fct(void *arg)
     }
 
     /* -------- ENROLL dwell (10s) + FR throttle -------- */
-    int enrolled = fr_is_enrolled();
+    int enrolled   = fr_is_enrolled();
     int can_run_fr = 0;
 
-    if (!enrolled && primary.have) {
-      /* We only *enroll* when exactly 1 detection exists in the frame */
-      if (pp_output.nb_detect == 1) {
-        uint32_t dwell = now - primary.first_seen_ms;
+    if (!enroll_countdown_done) {
+      /* We haven't consumed the 10s countdown yet */
+      if (!enrolled && primary.have) {
+        if (pp_output.nb_detect == 1) {
+          uint32_t dwell = now - primary.first_seen_ms;
 
-        /* 1 Hz countdown UART */
-        if (now - last_countdown_log >= 1000U) {
-          int remain_s = (int)((ENROLL_DWELL_MS > dwell) ? ((ENROLL_DWELL_MS - dwell + 999)/1000) : 0);
-          printf("[ENROLL] Keep your face steady… %ds\r\n", remain_s);
-          last_countdown_log = now;
-        }
-
-        /* Update on-screen label during dwell */
-        {
-          int remain_s = (int)((ENROLL_DWELL_MS > dwell) ? ((ENROLL_DWELL_MS - dwell + 999)/1000) : 0);
-          if (remain_s > 0) {
-            snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "%s (%ds)", FR_SUBJECT_NAME, remain_s);
-          } else {
-            snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "%s", FR_SUBJECT_NAME);
+          /* 1 Hz countdown UART + on-screen label during dwell */
+          if (now - last_countdown_log >= 1000U) {
+            int remain_s = (int)((ENROLL_DWELL_MS > dwell) ? ((ENROLL_DWELL_MS - dwell + 999)/1000) : 0);
+            printf("[ENROLL] Keep your face steady… %ds\r\n", remain_s);
+            last_countdown_log = now;
           }
-        }
 
-        if (dwell >= ENROLL_DWELL_MS) {
-          /* open enrollment window and let FR run now */
-          fr_set_enroll_gate(1);
-          can_run_fr = 1;
+          int remain_s = (int)((ENROLL_DWELL_MS > dwell) ? ((ENROLL_DWELL_MS - dwell + 999)/1000) : 0);
+          snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label),
+                   (remain_s > 0) ? "%s (%ds)" : "%s",
+                   FR_SUBJECT_NAME, remain_s);
+
+          if (dwell >= ENROLL_DWELL_MS) {
+            /* Countdown finished ONCE: latch forever */
+            enroll_countdown_done = 1;
+            fr_set_enroll_gate(1);          /* start collecting samples now */
+            can_run_fr = 1;                 /* and run FR immediately */
+          } else {
+            fr_set_enroll_gate(0);
+          }
         } else {
+          /* more than one face: pause dwell & keep gate closed */
           fr_set_enroll_gate(0);
+          primary.first_seen_ms = now;      /* reset dwell when crowd appears */
         }
-      } else {
-        /* more than one face: pause dwell & keep gate closed */
+      } else if (enrolled && primary.have) {
+        /* In the unlikely case we got enrolled before countdown finished */
+        enroll_countdown_done = 1;
         fr_set_enroll_gate(0);
-        primary.first_seen_ms = now;      /* reset dwell when crowd appears */
+        if (now - last_fr_ms >= FR_THROTTLE_MS) can_run_fr = 1;
+      } else {
+        fr_set_enroll_gate(0);
       }
-    } else if (enrolled && primary.have) {
-      /* Runtime matching — no dwell needed, but throttle */
-      fr_set_enroll_gate(0);
-      if (now - last_fr_ms >= FR_THROTTLE_MS) can_run_fr = 1;
     } else {
-      fr_set_enroll_gate(0);
+      /* Countdown is DONE (one-shot). Never show it again. Just run FR. */
+      fr_set_enroll_gate(enrolled ? 0 : 1); /* keep filling samples quietly until enrolled */
+      if (primary.have && (now - last_fr_ms >= FR_THROTTLE_MS)) {
+        can_run_fr = 1;
+      }
+      /* Note: DO NOT reset primary.first_seen_ms anymore — no more countdowns. */
     }
 
     /* -------- Run FaceRec once on the stabilized primary (if allowed) -------- */
@@ -1453,7 +1471,7 @@ static void pp_thread_fct(void *arg)
       LL_ATON_RT_Main(&NN_Instance_face_recognition);
       NPU_Unlock(TAG_FR);
       uint32_t fr_ms = HAL_GetTick() - t0;
-      (void)fr_ms; /* quiet; helpers already log their own stats */
+      (void)fr_ms;
 
       DCACHE_Invalidate(fr_out_ptr, fr_out_len);
       int n_floats = (int)(fr_out_len / (uint32_t)sizeof(float));
@@ -1469,12 +1487,12 @@ static void pp_thread_fct(void *arg)
         fr_after_inference_and_decide((const float*)fr_out_ptr, n_floats, 0);
       }
 
-      /* Update overlay label based on last match verdict */
+      /* Update overlay label based on last match verdict — ALWAYS show verdict now */
       {
         float sim = -1.f;
         int is_match = fr_get_last_match(&sim);
         if (is_match) {
-          snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "%s", FR_SUBJECT_NAME);  /* "Muazzam" */
+          snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "%s Found", FR_SUBJECT_NAME);  /* "Muazzam Found" */
         } else {
           snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "Unknown");
         }
@@ -1506,7 +1524,6 @@ static void pp_thread_fct(void *arg)
     xSemaphoreGive(disp.update);
   }
 }
-
 
 
 
