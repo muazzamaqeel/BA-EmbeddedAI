@@ -17,7 +17,7 @@
  */
 
 #include <assert.h>
-
+#include <string.h>
 #include "app.h"
 #include "app_config.h"
 #include "app_fuseprogramming.h"
@@ -54,6 +54,26 @@ void Error_Handler(void);
 
 /* This is defined in port.c */
 void vPortSetupTimerInterrupt(void);
+static int HyperRAM_Map_Once(void)
+{
+  static int done = 0;
+  if (done) return 0;
+
+  int32_t st;
+  st = BSP_XSPI_RAM_Init(0);
+  if (st != BSP_ERROR_NONE) {
+    printf("XSPI1 HyperRAM init failed: %ld\r\n", (long)st);
+    return -1;
+  }
+  st = BSP_XSPI_RAM_EnableMemoryMappedMode(0);
+  if (st != BSP_ERROR_NONE) {
+    printf("XSPI1 HyperRAM MMAP enable failed: %ld\r\n", (long)st);
+    return -2;
+  }
+  printf("XSPI1 HyperRAM mapped @ 0x90000000..0x90FFFFFF\r\n");
+  done = 1;
+  return 0;
+}
 
 
 // --- XSPI1 HyperRAM: enable memory-mapped window @ 0x9000_0000 .. 0x90FF_FFFF
@@ -302,65 +322,104 @@ static int main_freertos()
   return -1;
 }
 
+
+
+
+
+
+
 static void main_thread_fct(void *arg)
 {
   uint32_t preemptPriority;
   uint32_t subPriority;
   IRQn_Type i;
 
-  /* Copy SysTick_IRQn priority set by RTOS and use it as default priorities for IRQs. We are now sure that all irqs
-   * have default priority below or equal to configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY.
-   */
-  HAL_NVIC_GetPriority(SysTick_IRQn, HAL_NVIC_GetPriorityGrouping(), &preemptPriority, &subPriority);
-  for (i = PVD_PVM_IRQn; i <= LTDC_UP_ERR_IRQn; i++)
+  /* Inherit SysTick priority to all IRQs so they stay below
+     configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY. */
+  HAL_NVIC_GetPriority(SysTick_IRQn, HAL_NVIC_GetPriorityGrouping(),
+                       &preemptPriority, &subPriority);
+  for (i = PVD_PVM_IRQn; i <= LTDC_UP_ERR_IRQn; i++) {
     HAL_NVIC_SetPriority(i, preemptPriority, subPriority);
+  }
 
-  /* Call SystemClock_Config() after vTaskStartScheduler() since it call HAL_Delay() which call vTaskDelay(). Drawback
-   * is that we must call vPortSetupTimerInterrupt() since SystemCoreClock value has been modified by SystemClock_Config()
-   */
+  /* System clock uses HAL_Delay() → call after scheduler starts */
   SystemClock_Config();
   vPortSetupTimerInterrupt();
 
+  /* UART for logs */
   CONSOLE_Config();
 
+  /* NPU SRAMs + caches */
   NPURam_enable();
   Fuse_Programming();
-
   NPUCache_config();
 
 #ifdef STM32N6570_DK_REV
-  /*** External RAM (HyperRAM on XSPI1) *****************************************/
-  {
-    int32_t st;
-    st = BSP_XSPI_RAM_Init(0);                     // <-- CORRECT 1-arg signature
-    if (st != BSP_ERROR_NONE) {
-      printf("XSPI1 HyperRAM init failed: %ld\r\n", (long)st);
-      Error_Handler();
-    }
-    st = BSP_XSPI_RAM_EnableMemoryMappedMode(0);
-    if (st != BSP_ERROR_NONE) {
-      printf("XSPI1 HyperRAM MMAP enable failed: %ld\r\n", (long)st);
-      Error_Handler();
-    }
-    printf("XSPI1 HyperRAM mapped @ 0x90000000..0x90FFFFFF\r\n");
+  /* ---- External RAM: HyperRAM on XSPI1 ----
+     Map ONCE (idempotent), used by IN_PSRAM buffers. */
+  if (HyperRAM_Map_Once() != 0) {
+    Error_Handler();
   }
 #endif
 
-  /*** External NOR (weights on XSPI2) ******************************************/
-  BSP_XSPI_NOR_Init_t NOR_Init;
-  NOR_Init.InterfaceMode = BSP_XSPI_NOR_OPI_MODE;
-  NOR_Init.TransferRate  = BSP_XSPI_NOR_DTR_TRANSFER;
-  BSP_XSPI_NOR_Init(0, &NOR_Init);
-  BSP_XSPI_NOR_EnableMemoryMappedMode(0);
+  /* ---- External NOR (weights): prefer XSPI2, fallback XSPI1 ---- */
+  {
+    BSP_XSPI_NOR_Init_t NOR_Init;
+    memset(&NOR_Init, 0, sizeof(NOR_Init));
+#ifdef BSP_XSPI_NOR_OPI_MODE
+    NOR_Init.InterfaceMode = BSP_XSPI_NOR_OPI_MODE;
+#endif
+#ifdef BSP_XSPI_NOR_DTR_TRANSFER
+    NOR_Init.TransferRate  = BSP_XSPI_NOR_DTR_TRANSFER;
+#endif
+#ifdef BSP_XSPI_NOR_DUALFLASH_DISABLE
+    NOR_Init.DualFlash     = BSP_XSPI_NOR_DUALFLASH_DISABLE;
+#endif
 
-  /* Set all required IPs as secure privileged */
+    // in main_thread_fct()
+    const int candidates[2] = {0, 1};
+    int used = -1;
+
+    for (int t = 0; t < 2; ++t) {
+      int inst = candidates[t];
+      printf("[XSPI-NOR] Init inst=%d...\r\n", inst);
+      int32_t st = BSP_XSPI_NOR_Init(inst, &NOR_Init);
+      if (st != BSP_ERROR_NONE) {
+        printf("[XSPI-NOR] Init failed on inst=%d, st=%ld\r\n", inst, (long)st);
+        continue;
+      }
+      printf("[XSPI-NOR] Enable MMAP inst=%d...\r\n", inst);
+      st = BSP_XSPI_NOR_EnableMemoryMappedMode(inst);
+      if (st != BSP_ERROR_NONE) {
+        printf("[XSPI-NOR] MMAP failed on inst=%d, st=%ld\r\n", inst, (long)st);
+        (void)BSP_XSPI_NOR_DeInit(inst);
+        continue;
+      }
+      used = inst;
+      break;
+    }
+
+    if (used < 0) {
+      printf("[XSPI-NOR][FATAL] Could not enable memory-mapped NOR on inst=1 or 0.\r\n");
+      Error_Handler();
+    } else {
+      printf("[XSPI-NOR] Mapped OK on inst=%d\r\n", used);
+    }
+  }
+
+  /* !!! IMPORTANT !!!
+     You previously had *another* unconditional NOR init here:
+         BSP_XSPI_NOR_Init(0, ...);
+         BSP_XSPI_NOR_EnableMemoryMappedMode(0);
+     That re-mapped NOR again and could stall.  → Removed. */
+
+  /* Secure privileged attributes for IPs */
   Security_Config();
 
+  /* Illegal Access Controller (optional trap) */
   IAC_Config();
 
-  /* Keep all IP's enabled during WFE so they can wake up CPU. Fine tune
-   * this if you want to save maximum power
-   */
+  /* Keep IPs clocked in low-power (as before) */
   LL_BUS_EnableClockLowPower(~0);
   LL_MEM_EnableClockLowPower(~0);
   LL_AHB1_GRP1_EnableClockLowPower(~0);
@@ -376,10 +435,23 @@ static void main_thread_fct(void *arg)
   LL_APB5_GRP1_EnableClockLowPower(~0);
   LL_MISC_EnableClockLowPower(~0);
 
+  /* Start application */
   app_run();
 
   vTaskDelete(NULL);
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 HAL_StatusTypeDef MX_DCMIPP_ClockConfig(DCMIPP_HandleTypeDef *hdcmipp)
 {

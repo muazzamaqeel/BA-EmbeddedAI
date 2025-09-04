@@ -118,26 +118,20 @@ static float  g_fr_out_user[FR_EMB_SIZE] ALIGN_32 IN_PSRAM;
 
 
 // --- XSPI1 HyperRAM: enable memory-mapped window @ 0x9000_0000 .. 0x90FF_FFFF
+/* app.c — disable duplicate HyperRAM mapping function */
+#if 0
 static int FR_HyperRAM_EnableMMAP(void)
 {
-  int32_t st;
-
-  // On N6570-DK the HyperRAM is on XSPI1. BSP index 0 typically maps to XSPI1.
-  st = BSP_XSPI_RAM_Init(0);
-  if (st != BSP_ERROR_NONE) {
-    printf("XSPI1 HyperRAM init failed: %ld\r\n", (long)st);
-    return -1;
-  }
-
+  int32_t st = BSP_XSPI_RAM_Init(0);
+  if (st != BSP_ERROR_NONE) { printf("XSPI1 HyperRAM init failed: %ld\r\n", (long)st); return -1; }
   st = BSP_XSPI_RAM_EnableMemoryMappedMode(0);
-  if (st != BSP_ERROR_NONE) {
-    printf("XSPI1 HyperRAM MMAP enable failed: %ld\r\n", (long)st);
-    return -2;
-  }
-
+  if (st != BSP_ERROR_NONE) { printf("XSPI1 HyperRAM MMAP enable failed: %ld\r\n", (long)st); return -2; }
   printf("XSPI1 HyperRAM mapped @ 0x90000000..0x90FFFFFF\r\n");
   return 0;
 }
+#endif
+
+
 volatile char g_fr_overlay_label[32] = "";  /* text shown in the box */
 
 
@@ -743,21 +737,6 @@ static const char* aton_io_errstr(int r){
 /* - input stats (throttled)      */
 /* - proper cache maintenance     */
 /* ============================== */
-
-
-/* ============================== */
-/* nn_thread_fct — INTERNAL-IO    */
-/* - camera RGB/BGR888 -> f32     */
-/* - input stats (throttled)      */
-/* - proper cache maintenance     */
-/* ============================== */
-/* ============================== */
-/* nn_thread_fct — INTERNAL-IO    */
-/* - camera RGB/BGR888 -> f32     */
-/* - input stats (throttled)      */
-/* - proper cache maintenance     */
-/* ============================== */
-
 static void nn_thread_fct(void *arg)
 {
   /* toggles */
@@ -862,7 +841,7 @@ static void nn_thread_fct(void *arg)
       /* cache clean: CPU wrote input, NPU will read it */
       DCACHE_Clean(aton_in, aton_in_len);
 
-      /* publish detector input snapshot to FR module */
+      /* publish detector input snapshot to FR module (float NHWC [0..1]) */
       fr_update_frame_snapshot(aton_in, aton_in_len);
 
     #if NN_LOG_INPUT_STATS
@@ -875,17 +854,18 @@ static void nn_thread_fct(void *arg)
     #endif
     }
 
-
     /* -------- prepare outputs for NPU write -------- */
     {
       const LL_Buffer_InfoTypeDef *nn_out_info = LL_ATON_Output_Buffers_Info_Default();
       for (int i = 0; i < NN_OUT_NB; ++i) {
         void *oaddr = LL_Buffer_addr_start(&nn_out_info[i]);
         size_t olen = (size_t)LL_Buffer_len(&nn_out_info[i]);
-#if defined(USE_DCACHE)
+    #if defined(USE_DCACHE)
         dcache_align_range(&oaddr, &olen);
         SCB_CleanInvalidateDCache_by_Addr(oaddr, (int)olen);
-#endif
+    #else
+        (void)oaddr; (void)olen;
+    #endif
       }
     }
 
@@ -908,6 +888,7 @@ static void nn_thread_fct(void *arg)
     ret = xSemaphoreGive(disp.lock);                     assert(ret == pdTRUE);
   }
 }
+
 
 
 
@@ -1179,6 +1160,12 @@ static inline float iou_norm_boxes(const od_pp_outBuffer_t *a, const od_pp_outBu
 
 
 
+static od_pp_outBuffer_t enroll_anchor;
+static int anchor_set = 0;
+
+
+
+
 
 
 
@@ -1206,7 +1193,7 @@ static void pp_thread_fct(void *arg)
     for (int i = 0; i < NN_OUT_NB; ++i) {
       const char *nm = nn_out_info[i].name ? nn_out_info[i].name : "(null)";
       unsigned long blen = (unsigned long)LL_Buffer_len(&nn_out_info[i]);
-      printf("[NN] out[%d] %-24s len=%lu bytes (%lu floats)\r\n",
+      printf("[NN] out[%d] %-24s len=%lu bytes (%lu floats)\n",
              i, nm, blen, blen / (unsigned long)sizeof(float));
     }
   }
@@ -1223,14 +1210,14 @@ static void pp_thread_fct(void *arg)
   app_postprocess_init(&pp_params);
 #endif
 
-  /* ---------- primary face stabilizer state ---------- */
+  /* ---------- primary face stabilizer ---------- */
   typedef struct {
     od_pp_outBuffer_t roi;
     int   have;
     int   visible_count;
     int   missing_count;
-    uint32_t first_seen_ms;   /* first time we latched this primary */
-    uint32_t last_seen_ms;    /* last time we updated from detector */
+    uint32_t first_seen_ms;
+    uint32_t last_seen_ms;
   } primary_t;
 
   static primary_t primary = {0};
@@ -1238,20 +1225,31 @@ static void pp_thread_fct(void *arg)
   static uint32_t last_blob_print     = 0;
   static uint32_t last_countdown_log  = 0;
   static uint32_t last_fr_ms          = 0;
+  static uint32_t last_reason_log     = 0;
 
-  /* NEW: one-shot enrollment countdown latch */
-  static int      enroll_countdown_done = 0;    /* 0 = not yet done; 1 = done forever until reboot */
+  /* One-shot enrollment countdown latch */
+  static int      enroll_countdown_done = 0;
+
+  /* 3-of-5 voting window: 255=empty, 1=match, 0=non-match */
+  static uint8_t  vote_win[5] = {255,255,255,255,255};
+  static int      vote_idx = 0, vote_filled = 0;
 
   /* knobs */
-  const float     SCORE_SIDE_REF     = 0.35f; /* prefer larger faces */
-  const float     CENTER_TOL         = 0.60f; /* radial tolerance when picking best */
-  const float     ACCEPT_CONF_MIN    = 0.60f; /* gate noisy boxes */
-  const float     ACCEPT_SIDE_MIN    = 0.20f; /* gate tiny boxes */
-  const float     STABLE_IOU_MIN     = 0.30f; /* keep same primary when IoU ≥ this */
-  const int       HOLD_MISS_FRAMES   = 6;     /* keep box for a few missed frames */
-  const float     EMA_ALPHA          = 0.70f; /* smoothing of cx,cy,w,h */
-  const uint32_t  ENROLL_DWELL_MS    = 10000; /* 10 s */
-  const uint32_t  FR_THROTTLE_MS     = 250;   /* run FR at most every 250ms */
+  const float     SCORE_SIDE_REF     = 0.35f;   /* prefer larger faces */
+  const float     CENTER_TOL         = 0.60f;   /* radial tolerance when picking best */
+  const float     ACCEPT_CONF_MIN    = 0.70f;   /* stricter gating */
+  const float     ACCEPT_SIDE_MIN    = 0.28f;   /* ignore tiny faces */
+  const float     STABLE_IOU_MIN     = 0.30f;   /* keep same primary when IoU ≥ this */
+  const int       HOLD_MISS_FRAMES   = 6;       /* keep box for a few missed frames */
+  const float     EMA_ALPHA          = 0.70f;   /* smoothing of cx,cy,w,h */
+  const uint32_t  ENROLL_DWELL_MS    = 10000;   /* 10 s */
+  const uint32_t  FR_THROTTLE_MS     = 250;     /* run FR at most every 250ms */
+  const float     VOTE_MARGIN        = 0.05f;   /* deadband margin around thr_eff */
+  const float     FAST_ACCEPT_BOOST  = 0.07f;   /* 2x strong matches -> instant accept */
+
+  /* Enrollment anchor */
+  static od_pp_outBuffer_t enroll_anchor;
+  static int anchor_set = 0;
 
   while (1)
   {
@@ -1282,7 +1280,7 @@ static void pp_thread_fct(void *arg)
           }
           if (nan_cnt == 0 && cnt > 0) {
             float mean = sum / (float)cnt;
-            printf("[NN] out%d nf=%d  min=% .5f  max=% .5f  mean=% .5f  nz=%d\r\n",
+            printf("[NN] out%d nf=%d  min=% .5f  max=% .5f  mean=% .5f  nz=%d\n",
                    j, nf, minv, maxv, mean, nz);
           }
         }
@@ -1309,6 +1307,7 @@ static void pp_thread_fct(void *arg)
     int have_best = 0;
     if (pp_output.nb_detect > 0) {
       float best_score = -1.f;
+      int best_i = -1;
       for (uint32_t i = 0; i < pp_output.nb_detect; ++i) {
         const od_pp_outBuffer_t *d = &pp_output.pOutBuff[i];
         float side = fmaxf(d->width, d->height);
@@ -1316,12 +1315,19 @@ static void pp_thread_fct(void *arg)
 
         float dx = fabsf(d->x_center - 0.5f);
         float dy = fabsf(d->y_center - 0.5f);
-        float r_center = sqrtf(dx*dx + dy*dy);                 /* 0 center .. ~0.71 corner */
+        float r_center = sqrtf(dx*dx + dy*dy);
         float s_size   = fminf(1.f, side / SCORE_SIDE_REF);
         float s_center = 1.f - fminf(1.f, r_center / CENTER_TOL);
         float score = d->conf * (0.25f + 0.75f * s_size) * s_center;
 
-        if (score > best_score) { best_score = score; best = *d; have_best = 1; }
+        if (score > best_score) { best_score = score; best = *d; have_best = 1; best_i = (int)i; }
+      }
+      if (have_best) {
+        float side = fmaxf(best.width, best.height);
+        float dx = fabsf(best.x_center - 0.5f);
+        float dy = fabsf(best.y_center - 0.5f);
+        float r_center = sqrtf(dx*dx + dy*dy);
+        printf("[PP] best_det idx=%d conf=%.2f side=%.3f r_center=%.3f\n", best_i, best.conf, side, r_center);
       }
     }
 
@@ -1334,7 +1340,7 @@ static void pp_thread_fct(void *arg)
         primary.first_seen_ms = now;
         primary.last_seen_ms  = now;
       } else {
-        /* IoU between previous primary and this frame's best */
+        /* IoU check vs previous primary */
         float ax0 = primary.roi.x_center - primary.roi.width*0.5f;
         float ay0 = primary.roi.y_center - primary.roi.height*0.5f;
         float ax1 = primary.roi.x_center + primary.roi.width*0.5f;
@@ -1364,7 +1370,6 @@ static void pp_thread_fct(void *arg)
           primary.missing_count = 0;
           primary.last_seen_ms  = now;
         } else {
-          /* Only switch if the old one has been missing for a while */
           if (primary.missing_count >= HOLD_MISS_FRAMES) {
             primary.roi = best;
             primary.visible_count = 1;
@@ -1372,18 +1377,15 @@ static void pp_thread_fct(void *arg)
             primary.first_seen_ms = now;
             primary.last_seen_ms  = now;
           } else {
-            /* keep current primary; treat as a miss this frame */
             primary.missing_count++;
           }
         }
       }
     } else {
-      /* no acceptable detection this frame */
       if (primary.have) {
         primary.missing_count++;
         if (primary.missing_count > HOLD_MISS_FRAMES) {
           memset(&primary, 0, sizeof(primary));
-          /* clear overlay when primary is lost */
           g_fr_overlay_label[0] = '\0';
         }
       }
@@ -1393,16 +1395,18 @@ static void pp_thread_fct(void *arg)
     int enrolled   = fr_is_enrolled();
     int can_run_fr = 0;
 
+    /* Crowd guard: never enroll or recognize when multiple faces visible */
+    int crowd = (pp_output.nb_detect > 1);
+
     if (!enroll_countdown_done) {
-      /* We haven't consumed the 10s countdown yet */
       if (!enrolled && primary.have) {
-        if (pp_output.nb_detect == 1) {
+        if (!crowd) {
           uint32_t dwell = now - primary.first_seen_ms;
 
-          /* 1 Hz countdown UART + on-screen label during dwell */
+          /* 1 Hz countdown during dwell */
           if (now - last_countdown_log >= 1000U) {
             int remain_s = (int)((ENROLL_DWELL_MS > dwell) ? ((ENROLL_DWELL_MS - dwell + 999)/1000) : 0);
-            printf("[ENROLL] Keep your face steady… %ds\r\n", remain_s);
+            printf("[ENROLL] Keep your face steady… %ds\n", remain_s);
             last_countdown_log = now;
           }
 
@@ -1412,20 +1416,25 @@ static void pp_thread_fct(void *arg)
                    FR_SUBJECT_NAME, remain_s);
 
           if (dwell >= ENROLL_DWELL_MS) {
-            /* Countdown finished ONCE: latch forever */
             enroll_countdown_done = 1;
+            enroll_anchor = primary.roi;
+            anchor_set = 1;
+
+            printf("[ENROLL] dwell complete — OPEN gate & anchor set\n");
             fr_set_enroll_gate(1);          /* start collecting samples now */
-            can_run_fr = 1;                 /* and run FR immediately */
+            can_run_fr = 1;                 /* run FR immediately */
           } else {
             fr_set_enroll_gate(0);
           }
         } else {
-          /* more than one face: pause dwell & keep gate closed */
           fr_set_enroll_gate(0);
           primary.first_seen_ms = now;      /* reset dwell when crowd appears */
+          if ((now - last_reason_log) >= 1000U) {
+            printf("[FR][SKIP] crowd detected during enrollment dwell\n");
+            last_reason_log = now;
+          }
         }
-      } else if (enrolled && primary.have) {
-        /* In the unlikely case we got enrolled before countdown finished */
+      } else if (enrolled && primary.have && !crowd) {
         enroll_countdown_done = 1;
         fr_set_enroll_gate(0);
         if (now - last_fr_ms >= FR_THROTTLE_MS) can_run_fr = 1;
@@ -1433,12 +1442,36 @@ static void pp_thread_fct(void *arg)
         fr_set_enroll_gate(0);
       }
     } else {
-      /* Countdown is DONE (one-shot). Never show it again. Just run FR. */
-      fr_set_enroll_gate(enrolled ? 0 : 1); /* keep filling samples quietly until enrolled */
-      if (primary.have && (now - last_fr_ms >= FR_THROTTLE_MS)) {
-        can_run_fr = 1;
+      /* Countdown DONE; keep enrolling only if same anchored face is present and alone */
+      if (!enrolled) {
+        if (primary.have && anchor_set &&
+            iou_norm_boxes(&primary.roi, &enroll_anchor) >= 0.60f &&
+            !crowd) {
+          fr_set_enroll_gate(1);
+        } else {
+          fr_set_enroll_gate(0);
+          if ((now - last_reason_log) >= 1000U && !primary.have) {
+            printf("[FR][SKIP] enroll phase: primary lost or anchor mismatch (IoU<0.60) or crowd\n");
+            last_reason_log = now;
+          }
+        }
+      } else {
+        fr_set_enroll_gate(0);
       }
-      /* Note: DO NOT reset primary.first_seen_ms anymore — no more countdowns. */
+
+      if (primary.have && !crowd) {
+        if (now - last_fr_ms >= FR_THROTTLE_MS) {
+          can_run_fr = 1;
+        } else if ((now - last_reason_log) >= 1000U) {
+          printf("[FR][SKIP] throttled (%lums < %lums)\n",
+                 (unsigned long)(now - last_fr_ms), (unsigned long)FR_THROTTLE_MS);
+          last_reason_log = now;
+        }
+      } else if ((now - last_reason_log) >= 1000U) {
+        if (crowd) printf("[FR][SKIP] crowd\n");
+        else       printf("[FR][SKIP] no stable primary\n");
+        last_reason_log = now;
+      }
     }
 
     /* -------- Run FaceRec once on the stabilized primary (if allowed) -------- */
@@ -1454,8 +1487,22 @@ static void pp_thread_fct(void *arg)
 
       fr_check_alias(fr_in, fr_out_ptr);
 
+      /* ROI quick log (normalized + px) */
+      {
+        float sideN = fmaxf(primary.roi.width, primary.roi.height);
+        float dx = fabsf(primary.roi.x_center - 0.5f);
+        float dy = fabsf(primary.roi.y_center - 0.5f);
+        float r_center = sqrtf(dx*dx + dy*dy);
+        float side_px = sideN * (float)NN_WIDTH;
+        printf("[FR-IN][ROI] det#0 conf=%.2f  cx=%.3f cy=%.3f  w=%.3f h=%.3f  sideN=%.3f  r_center=%.3f  (px side=%.1f)\n",
+               primary.roi.conf, primary.roi.x_center, primary.roi.y_center,
+               primary.roi.width, primary.roi.height, sideN, r_center, side_px);
+      }
+
       /* Build input from the last NN frame snapshot */
       fr_prepare_input_for_det(&primary.roi, fr_in, FR_IN_W, FR_IN_H, NN_WIDTH, NN_HEIGHT, 0);
+
+      /* Cache: clean input (CPU->NPU) and clean+invalidate output BEFORE run */
       DCACHE_Clean(fr_in, fr_in_len);
 #if defined(USE_DCACHE)
       {
@@ -1465,40 +1512,99 @@ static void pp_thread_fct(void *arg)
         SCB_CleanInvalidateDCache_by_Addr(oaddr, (int)olen);
       }
 #endif
+
       /* Serialize FR on NPU */
       uint32_t t0 = HAL_GetTick();
       NPU_Lock(TAG_FR);
       LL_ATON_RT_Main(&NN_Instance_face_recognition);
       NPU_Unlock(TAG_FR);
       uint32_t fr_ms = HAL_GetTick() - t0;
-      (void)fr_ms;
 
+      /* Invalidate output AFTER NPU writes */
+#if defined(USE_DCACHE)
+      {
+        void *oaddr = LL_Buffer_addr_start(&fr_out_info[0]);
+        size_t olen = LL_Buffer_len(&fr_out_info[0]);
+        dcache_align_range(&oaddr, &olen);
+        SCB_InvalidateDCache_by_Addr(oaddr, (int)olen);
+      }
+#else
       DCACHE_Invalidate(fr_out_ptr, fr_out_len);
+#endif
+
+      /* Determine usable length defensively */
       int n_floats = (int)(fr_out_len / (uint32_t)sizeof(float));
+      if (n_floats < 16 || n_floats > (FR_EMB_SIZE*4)) {
+        n_floats = FR_EMB_SIZE;
+        printf("[FR][WARN] suspicious out_len=%lu bytes — using n=%d\n",
+               (unsigned long)fr_out_len, n_floats);
+      }
       if (n_floats > FR_EMB_SIZE) n_floats = FR_EMB_SIZE;
 
+      /* Copy to shadow buffer so later DMAs can’t clobber while we read */
       static float fr_out_shadow[FR_EMB_SIZE];
-      if (fr_in == fr_out_ptr) {
-        size_t cpy = (size_t)n_floats * sizeof(float);
-        if (cpy > sizeof(fr_out_shadow)) cpy = sizeof(fr_out_shadow);
-        memcpy(fr_out_shadow, fr_out_ptr, cpy);
-        fr_after_inference_and_decide(fr_out_shadow, (int)(cpy / sizeof(float)), 0);
-      } else {
-        fr_after_inference_and_decide((const float*)fr_out_ptr, n_floats, 0);
-      }
+      memcpy(fr_out_shadow, fr_out_ptr, (size_t)n_floats * sizeof(float));
 
-      /* Update overlay label based on last match verdict — ALWAYS show verdict now */
+      /* Hand off to FR decision (with corruption checks inside) */
+      fr_after_inference_and_decide(fr_out_shadow, n_floats, 0);
+      printf("[TIM] FR infer took %lums\n", (unsigned long)fr_ms);
+
+      /* --- Voting with fast-accept path --- */
       {
+        static float last_sim = -1.f;
+
         float sim = -1.f;
-        int is_match = fr_get_last_match(&sim);
-        if (is_match) {
-          snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "%s Found", FR_SUBJECT_NAME);  /* "Muazzam Found" */
+        (void)fr_get_last_match(&sim);
+        float thr_eff = fr_get_effective_threshold();
+
+        /* If we have two consecutive strong matches, accept immediately */
+        if (sim >= thr_eff + FAST_ACCEPT_BOOST && last_sim >= thr_eff + FAST_ACCEPT_BOOST) {
+          snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "%s", FR_SUBJECT_NAME);
+          printf("[FR][VOTE] fast-accept (sim=%.3f, prev=%.3f, thr=%.3f)\n", sim, last_sim, thr_eff);
+          /* reset window */
+          for (int i=0;i<5;i++) vote_win[i]=255; vote_idx=0; vote_filled=0;
         } else {
-          snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "Unknown");
+          /* Deadband voting around threshold */
+          int vote;
+          if      (sim >= (thr_eff + VOTE_MARGIN)) vote = 1;
+          else if (sim <= (thr_eff - VOTE_MARGIN)) vote = 0;
+          else {
+            int prev = (vote_filled > 0) ? vote_win[(vote_idx+4)%5] : 255;
+            vote = (prev == 0 || prev == 1) ? prev : 255;
+          }
+
+          vote_win[vote_idx] = (uint8_t)vote;
+          vote_idx = (vote_idx+1)%5; if (vote_filled<5) vote_filled++;
+
+          int ones=0, zeros=0;
+          for (int i=0;i<vote_filled;i++){ if (vote_win[i]==1) ones++; else if (vote_win[i]==0) zeros++; }
+
+          if (vote_filled >= 3) {
+            if (ones >= 3) {
+              snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "%s", FR_SUBJECT_NAME);
+              printf("[FR][VOTE] result=MATCH  (ones=%d zeros=%d)\n", ones, zeros);
+            } else if (zeros >= 3) {
+              snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "Unknown");
+              printf("[FR][VOTE] result=UNKNOWN  (ones=%d zeros=%d)\n", ones, zeros);
+            } else {
+              printf("[FR][VOTE] hold  (ones=%d zeros=%d)\n", ones, zeros);
+            }
+          } else {
+            printf("[FR][VOTE] warming-up %d/5 (vote=%d sim=%.3f thr=%.3f)\n",
+                   vote_filled, vote, sim, thr_eff);
+          }
         }
+        last_sim = sim;
       }
 
       last_fr_ms = now;
+    } else {
+      /* If we skipped FR due to crowd, avoid misleading label */
+      if (pp_output.nb_detect > 1) {
+        if (enroll_countdown_done || fr_is_enrolled()) {
+          snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "Unknown");
+        }
+      }
     }
 
     /* -------- Publish exactly ONE box to display (or none) -------- */
@@ -1524,8 +1630,6 @@ static void pp_thread_fct(void *arg)
     xSemaphoreGive(disp.update);
   }
 }
-
-
 
 
 
@@ -1718,10 +1822,7 @@ static void xspi_quick_check(void)
 
 void app_run()
 {
-  /* Map XSPI NOR and quick-check contents (optional but handy) */
-	  int inst = xspi_enable_mmap_auto();       // xSPI2 NOR (weights)
-	  if (inst >= 0) { xspi_quick_check(); }
-
+  /* NOTE: NOR (weights) is mapped in main_thread_fct(). Do not map again here. */
 
   /* RTOS priorities & handles */
   UBaseType_t isp_priority = FREERTOS_PRIORITY(2);
@@ -1743,11 +1844,9 @@ void app_run()
   CACHE_OP(SCB_CleanInvalidateDCache_by_Addr(lcd_fg_buffer, sizeof(lcd_fg_buffer)));
   Display_init();
 
-  /* Create buffer queues */
-  ret = bqueue_init(&nn_input_queue, 2, (uint8_t *[2]){nn_input_buffers[0], nn_input_buffers[1]});
-  assert(ret == 0);
-  ret = bqueue_init(&nn_output_queue, 2, (uint8_t *[2]){nn_output_buffers[0], nn_output_buffers[1]});
-  assert(ret == 0);
+  /* Queues */
+  ret = bqueue_init(&nn_input_queue, 2, (uint8_t *[2]){nn_input_buffers[0], nn_input_buffers[1]});  assert(ret == 0);
+  ret = bqueue_init(&nn_output_queue, 2, (uint8_t *[2]){nn_output_buffers[0], nn_output_buffers[1]});assert(ret == 0);
 
 #ifdef TRACKER_MODULE
   /* Tracker init + button */
@@ -1759,31 +1858,33 @@ void app_run()
   /* CPU load stats */
   cpuload_init(&cpu_load);
 
-  /*** Camera Init ************************************************************/
+  /* Camera */
   CAM_Init();
 
-  /* Semaphores + mutex init */
+  /* Semaphores + mutex */
   isp_sem     = xSemaphoreCreateCountingStatic(1, 0, &isp_sem_buffer);     assert(isp_sem);
   disp.update = xSemaphoreCreateCountingStatic(1, 0, &disp.update_buffer); assert(disp.update);
   disp.lock   = xSemaphoreCreateMutexStatic(&disp.lock_buffer);             assert(disp.lock);
 
-  /* === Global NPU mutex/guard === */
+  /* Global NPU mutex/guard */
   npu_guard_init();
 
-  /* ---- Bind FaceRec dedicated, non-aliased user IO buffers (globals) ----
-       static float g_fr_in_user [FR_IN_W * FR_IN_H * 3] ALIGN_32 IN_PSRAM;
-       static float g_fr_out_user[FR_EMB_SIZE]           ALIGN_32 IN_PSRAM; */
-
+  /* ---- Bind FaceRec dedicated, non-aliased user IO buffers (in PSRAM) ---- */
   printf("[FR] user buffers: IN=%p (len=%lu)  OUT=%p (len=%lu)\r\n",
-         (void*)g_fr_in_user, (unsigned long)sizeof(g_fr_in_user),
-         (void*)g_fr_out_user,(unsigned long)sizeof(g_fr_out_user));
+         (void*)g_fr_in_user,  (unsigned long)sizeof(g_fr_in_user),
+         (void*)g_fr_out_user, (unsigned long)sizeof(g_fr_out_user));
 
-  //int r_in  = LL_ATON_Set_User_Input_Buffer_face_recognition (0, (void*)g_fr_in_user,  sizeof(g_fr_in_user));
-  //int r_out = LL_ATON_Set_User_Output_Buffer_face_recognition(0, (void*)g_fr_out_user, sizeof(g_fr_out_user));
+  int r_in  = LL_ATON_Set_User_Input_Buffer_face_recognition (0, (void*)g_fr_in_user,  sizeof(g_fr_in_user));
+  int r_out = LL_ATON_Set_User_Output_Buffer_face_recognition(0, (void*)g_fr_out_user, sizeof(g_fr_out_user));
+  printf("[FR] bind IO: in=%s out=%s\r\n", aton_io_errstr(r_in), aton_io_errstr(r_out));
 
-  //printf("[FR] bind IO: in=%s out=%s\r\n", aton_io_errstr(r_in), aton_io_errstr(r_out));
+  bool fr_user_io_active = (r_in == LL_ATON_User_IO_NOERROR) && (r_out == LL_ATON_User_IO_NOERROR);
+  if (!fr_user_io_active) {
+    printf("[FR][WARN] user-IO binding unsupported on this build — "
+           "falling back to internal buffers (shadow copy + cache ops remain).\r\n");
+  }
 
-  /* Verify runtime actually points to our buffers and not the same region */
+  /* Report actual buffers the runtime uses (internal or user) */
   const LL_Buffer_InfoTypeDef *chk_in  = LL_ATON_Input_Buffers_Info_face_recognition();
   const LL_Buffer_InfoTypeDef *chk_out = LL_ATON_Output_Buffers_Info_face_recognition();
   void *p_in  = LL_Buffer_addr_start(&chk_in [0]);
@@ -1793,22 +1894,21 @@ void app_run()
          (unsigned long)LL_Buffer_len(&chk_in [0]),
          (unsigned long)LL_Buffer_len(&chk_out[0]));
 
-  /* Hard fail if binding failed; helps catch config mistakes early */
-  //assert(r_in  == LL_ATON_User_IO_NOERROR);
-  //assert(r_out == LL_ATON_User_IO_NOERROR);
-
-  /* Optional: warn if still aliased (should NOT happen once you re-export with separate I/O) */
   if (p_in == p_out) {
-    printf("[FR][WARN] IN and OUT alias (0x%p). Re-export FR with separate I/O (no in-place).\r\n", p_in);
+    printf("[FR][WARN] IN and OUT alias at %p — this network was exported in-place; "
+           "we’ll keep using shadow copy + strict cache discipline.\r\n", p_in);
   }
 
-  /* Face recognition module init (after IO binding) */
+  /* FR init after I/O handling */
   fr_init();
+  fr_set_subject(FR_SUBJECT_NAME);
+  fr_set_match_threshold(0.80f);
+
 
   /* Start LCD Display camera pipe stream */
   CAM_DisplayPipe_Start(lcd_bg_buffer[0], CMW_MODE_CONTINUOUS);
 
-  /* Threads init */
+  /* Threads */
   hdl = xTaskCreateStatic(nn_thread_fct, "nn",  configMINIMAL_STACK_SIZE * 2, NULL, nn_priority, nn_thread_stack, &nn_thread);
   assert(hdl != NULL);
   hdl = xTaskCreateStatic(pp_thread_fct, "pp",  configMINIMAL_STACK_SIZE * 2, NULL, pp_priority, pp_thread_stack, &pp_thread);
@@ -1818,7 +1918,6 @@ void app_run()
   hdl = xTaskCreateStatic(isp_thread_fct, "isp",configMINIMAL_STACK_SIZE * 2, NULL, isp_priority, isp_thread_stack, &isp_thread);
   assert(hdl != NULL);
 }
-
 
 
 
