@@ -1,5 +1,8 @@
+// facedetection_imp.c
 #include <math.h>
 #include <string.h>
+#include <assert.h>
+
 #include "facedetection_imp.h"
 #include "app_shared.h"
 
@@ -17,9 +20,6 @@
 #ifndef CMW_MODE_CONTINUOUS
 #define CMW_MODE_CONTINUOUS DCMIPP_MODE_CONTINUOUS
 #endif
-
-
-
 
 /* ============================== */
 /* nn_thread_fct — INTERNAL-IO    */
@@ -56,22 +56,21 @@ void nn_thread_fct(void *arg)
 
   uint32_t nn_period[2]; nn_period[1] = HAL_GetTick();
   uint32_t last_inp_print = 0;
-  int did_synth = 0;
 
-  /* Preprocess: map [0..255] -> [0..1] (BlazeFace expects [0..1]) */
+  /* Preprocess: map [0..255] -> [0..1] (BlazeFace/YOLO* expect [0..1]) */
   const float scale = 1.0f / 255.0f;
   const float bias  = 0.0f;
 
   while (1)
   {
-    /* Wait a captured frame (RGB888 bytes: 128*128*3) */
+    /* Wait a captured frame (RGB888 bytes: NN_WIDTH*NN_HEIGHT*3) */
     uint8_t *capture_buffer = bqueue_get_ready(&nn_input_queue);
     assert(capture_buffer);
 
     /* IMPORTANT: DMA wrote the frame -> invalidate before CPU reads */
     DCACHE_Invalidate(capture_buffer, NN_WIDTH * NN_HEIGHT * NN_BPP);
 
-    /* Use output queue only as a token to sync with pp thread */
+    /* Reserve an output token to sync with pp thread */
     (void)bqueue_get_free(&nn_output_queue, 1);
 
     /* compute NN period */
@@ -166,11 +165,11 @@ void nn_thread_fct(void *arg)
     uint32_t inf_ms = HAL_GetTick() - ts;
     printf("[TIM] NN  infer took %lums\r\n", (unsigned long)inf_ms);
 
-    /* queues */
+    /* Return camera buffer and wake postprocess */
     bqueue_put_free(&nn_input_queue);
     bqueue_put_ready(&nn_output_queue);
 
-    /* publish stats to display */
+    /* publish stats to display (pp thread will fill boxes & signal update) */
     int ret = xSemaphoreTake(disp.lock, portMAX_DELAY);  assert(ret == pdTRUE);
     disp.info.inf_ms = inf_ms;
     disp.info.nn_period_ms = nn_period_ms;
