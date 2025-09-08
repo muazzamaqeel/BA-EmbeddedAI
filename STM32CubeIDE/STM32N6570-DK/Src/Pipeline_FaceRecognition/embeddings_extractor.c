@@ -1,21 +1,15 @@
-/* embeddings_extractor.c
+/**
+ * @file embeddings_extractor.c
+ * @brief Boot-time embeddings from existing BMP files (auto-embedded).
  *
- * Offline extractor: given an RGB888 image buffer in memory, run BlazeFace +
- * FaceRec to produce one embedding vector. No camera needed.
- *
- * Public API:
- *   int FR_Extract_From_RGB888(const uint8_t *rgb, int img_w, int img_h,
- *                              float *out_emb, int out_emb_cap,
- *                              od_pp_outBuffer_t *out_roi);
- *
- * Return:
- *   0  -> success, embedding written
- *   +1 -> no face found
- *   <0 -> error
+ * - Reads g_user_bmps[] (auto-generated from UserFace/*.bmp)
+ * - Supports 24-bit uncompressed BMP (BI_RGB), top-down or bottom-up
+ * - Center-square resamples → FaceRec input (FR_IN_W x FR_IN_H), [-1..1]
+ * - Runs FaceRec once per image and prints:  <label>|<dim>|v0,...,vN-1
+ * - No live-frame logic, no camera, no detector usage
  */
 
 #include <stdint.h>
-#include <stddef.h>
 #include <stdbool.h>
 #include <string.h>
 #include <math.h>
@@ -24,294 +18,238 @@
 
 #include "stm32n6xx_hal.h"
 
-#include "network.h"
-#include "app_config.h"
-#include "app_postprocess.h"
-#include "cache_utils.h"
-#include "ll_aton_runtime.h"
-#include "facedetection_imp.h"
-#include "facerecognition_imp.h"
-#include "face_recognition.h"
-#include "facedetection_imp_bridge.h"
-#include "fr_helpers.h"
+#include "emb_assets.h"              /* g_user_bmps[], g_user_bmps_count */
+#include "face_recognition.h"        /* fr_init(), fr_set_subject(), FR_IN_W/H */
+#include "ll_aton_runtime.h"         /* LL_Buffer_InfoTypeDef, LL_Buffer_* */
+#include "cache_utils.h"             /* DCACHE_Clean/Invalidate, dcache_align_range */
+#include "npu_guard.h"               /* NPU_Lock/Unlock, TAG_FR */
 
-/* Network-specific buffer info helpers (generated names) */
+/* ----------- Defaults if not provided ----------- */
+#ifndef FR_IN_W
+#define FR_IN_W    112
+#endif
+#ifndef FR_IN_H
+#define FR_IN_H    112
+#endif
+#ifndef FR_EMB_SIZE
+#define FR_EMB_SIZE 512
+#endif
+#ifndef FR_SUBJECT_NAME
+#define FR_SUBJECT_NAME "ME"
+#endif
+
+/* FaceRec runtime entry points for your FR instance (provided by your app) */
+extern void FaceRec_Run_NoLock(void);
 extern const LL_Buffer_InfoTypeDef *LL_ATON_Input_Buffers_Info_face_recognition(void);
 extern const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 
-/* If your FaceRec Run wrapper is declared elsewhere, keep this extern: */
-void FaceRec_Run_NoLock(void);
+/* ============================== */
+/*     Minimal BMP 24-bit I/O     */
+/* ============================== */
 
+typedef struct {
+  const uint8_t *pixels;   /* pointer to start of pixel array                */
+  int width;               /* image width                                    */
+  int height_abs;          /* absolute height                                */
+  int row_stride;          /* bytes per row incl. 4B padding                 */
+  int bpp;                 /* bits per pixel (expect 24)                     */
+  int compression;         /* expect 0 (BI_RGB)                              */
+  bool top_down;           /* true if height < 0 (origin at top-left)        */
+} Bmp24View;
 
-/* -------- helpers -------- */
+static uint32_t rd_le32(const uint8_t *p){ return (uint32_t)p[0] | ((uint32_t)p[1]<<8) | ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24); }
+static uint16_t rd_le16(const uint8_t *p){ return (uint16_t)p[0] | ((uint16_t)p[1]<<8); }
 
-static inline int clampi(int v, int lo, int hi) {
-  return (v < lo) ? lo : (v > hi) ? hi : v;
+static int bmp24_open(const uint8_t *buf, uint32_t len, Bmp24View *out)
+{
+  if (!buf || len < 54) return -1;
+  if (buf[0] != 'B' || buf[1] != 'M') return -2;
+
+  uint32_t pixel_off = rd_le32(buf + 10);
+  const uint8_t *dib = buf + 14;
+  if (len < 14 + 40) return -3;            /* need BITMAPINFOHEADER (40 bytes) */
+
+  /* Parse BITMAPINFOHEADER (common path) */
+  uint32_t dib_size  = rd_le32(dib + 0);   (void)dib_size;
+  int32_t  w         = (int32_t) rd_le32(dib + 4);
+  int32_t  h_signed  = (int32_t) rd_le32(dib + 8);
+  uint16_t planes    = rd_le16(dib + 12);
+  uint16_t bpp       = rd_le16(dib + 14);
+  uint32_t comp      = rd_le32(dib + 16);
+
+  if (planes != 1)           return -4;
+  if (bpp != 24)             return -5;    /* only 24-bit supported */
+  if (comp != 0 /*BI_RGB*/)  return -6;    /* only uncompressed     */
+  if (w <= 0 || h_signed == 0) return -7;
+
+  bool top_down   = (h_signed < 0);
+  int  h_abs      = top_down ? -h_signed : h_signed;
+  int  row_stride = ((w * 3 + 3) / 4) * 4;
+
+  if (pixel_off + (uint32_t)row_stride * (uint32_t)h_abs > len) return -8;
+
+  out->pixels     = buf + pixel_off;
+  out->width      = w;
+  out->height_abs = h_abs;
+  out->row_stride = row_stride;
+  out->bpp        = 24;
+  out->compression= 0;
+  out->top_down   = top_down;
+  return 0;
 }
 
-/* Bilinear resize: RGB888 src -> NHWC float dst in [0..1] (size: dst_w x dst_h x 3) */
-static void resize_rgb888_to_float_nhwc(const uint8_t *src, int sw, int sh,
-                                        float *dst, int dw, int dh)
+/* Fetch B,G,R from integer pixel coords (clamped) → return RGB floats [0..255] */
+static inline void bmp24_get_bgr(const Bmp24View *v, int x, int y, float *r, float *g, float *b)
 {
-  const float sx_scale = (float)sw / (float)dw;
-  const float sy_scale = (float)sh / (float)dh;
-  const float inv255 = 1.0f / 255.0f;
+  if (x < 0) x = 0; if (x >= v->width) x = v->width - 1;
+  if (y < 0) y = 0; if (y >= v->height_abs) y = v->height_abs - 1;
 
-  for (int y = 0; y < dh; ++y) {
-    float fy = (y + 0.5f) * sy_scale - 0.5f;
-    int y0 = (int)floorf(fy);
-    int y1 = y0 + 1;
+  int row = v->top_down ? y : (v->height_abs - 1 - y);
+  const uint8_t *p = v->pixels + row * v->row_stride + x * 3;
+  float B = (float)p[0], G = (float)p[1], R = (float)p[2];
+  *r = R; *g = G; *b = B;   /* convert to RGB order */
+}
+
+/* Center-square bilinear resample BMP24 → FR input NHWC float [-1..1] */
+static void bmp24_center_square_to_fr_input(const Bmp24View *v, float *dst, int dw, int dh)
+{
+  /* centered square crop (no extra margin) */
+  int side = (v->width < v->height_abs) ? v->width : v->height_abs;
+  int x0i = (v->width  - side) / 2;
+  int y0i = (v->height_abs - side) / 2;
+
+  const float sx = (float)side / (float)dw;
+  const float sy = (float)side / (float)dh;
+
+  for (int y=0; y<dh; ++y) {
+    float fy = y0i + (y + 0.5f) * sy - 0.5f;
+    int y0 = (int)floorf(fy), y1 = y0 + 1;
     float wy = fy - (float)y0;
-    y0 = clampi(y0, 0, sh - 1);
-    y1 = clampi(y1, 0, sh - 1);
 
-    for (int x = 0; x < dw; ++x) {
-      float fx = (x + 0.5f) * sx_scale - 0.5f;
-      int x0 = (int)floorf(fx);
-      int x1 = x0 + 1;
+    for (int x=0; x<dw; ++x) {
+      float fx = x0i + (x + 0.5f) * sx - 0.5f;
+      int x0 = (int)floorf(fx), x1 = x0 + 1;
       float wx = fx - (float)x0;
-      x0 = clampi(x0, 0, sw - 1);
-      x1 = clampi(x1, 0, sw - 1);
 
-      /* 4 source pixels (each is RGB888) */
-      const uint8_t *p00 = src + ((y0 * sw + x0) * 3);
-      const uint8_t *p01 = src + ((y0 * sw + x1) * 3);
-      const uint8_t *p10 = src + ((y1 * sw + x0) * 3);
-      const uint8_t *p11 = src + ((y1 * sw + x1) * 3);
+      float r00,g00,b00, r01,g01,b01, r10,g10,b10, r11,g11,b11;
+      bmp24_get_bgr(v, x0, y0, &r00,&g00,&b00);
+      bmp24_get_bgr(v, x1, y0, &r01,&g01,&b01);
+      bmp24_get_bgr(v, x0, y1, &r10,&g10,&b10);
+      bmp24_get_bgr(v, x1, y1, &r11,&g11,&b11);
 
-      float w00 = (1.f - wx) * (1.f - wy);
-      float w01 =        wx  * (1.f - wy);
-      float w10 = (1.f - wx) *        wy;
-      float w11 =        wx  *        wy;
+      float w00=(1.f-wx)*(1.f-wy), w01=wx*(1.f-wy),
+            w10=(1.f-wx)*wy      , w11=wx*wy;
 
-      int di = (y * dw + x) * 3;
+      float r = r00*w00 + r01*w01 + r10*w10 + r11*w11;
+      float g = g00*w00 + g01*w01 + g10*w10 + g11*w11;
+      float b = b00*w00 + b01*w01 + b10*w10 + b11*w11;
 
-      /* R,G,B order (adjust if your detector expects BGR) */
-      for (int c = 0; c < 3; ++c) {
-        float v = (float)p00[c] * w00 +
-                  (float)p01[c] * w01 +
-                  (float)p10[c] * w10 +
-                  (float)p11[c] * w11;
-        dst[di + c] = v * inv255;     /* [0..255] -> [0..1] */
-      }
+      int d = (y*dw + x)*3;
+      /* [0..255] → [-1..1] */
+      dst[d+0] = r*(1.f/127.5f)-1.f;
+      dst[d+1] = g*(1.f/127.5f)-1.f;
+      dst[d+2] = b*(1.f/127.5f)-1.f;
     }
   }
 }
 
-/* Crop + resize a normalized ROI from a NHWC [0..1] frame to FR input [-1..1] */
-static void crop_normROI_to_FR_input(const float *src_nhwc, int src_w, int src_h,
-                                     const od_pp_outBuffer_t *roi,
-                                     float *dst_nhwc, int dst_w, int dst_h)
+/* ============================== */
+/*       FR init helper           */
+/* ============================== */
+
+static void fr_init_once(void)
 {
-  /* Make square with a small margin (same policy as your runtime) */
-  float cx = roi->x_center * src_w;
-  float cy = roi->y_center * src_h;
-  float bw = roi->width  * src_w;
-  float bh = roi->height * src_h;
-  float side = fmaxf(bw, bh) * 1.10f;  /* +10% */
-  float x0 = cx - side * 0.5f;
-  float y0 = cy - side * 0.5f;
-  float x1 = cx + side * 0.5f;
-  float y1 = cy + side * 0.5f;
-
-  const float sx_scale = (x1 - x0) / (float)dst_w;
-  const float sy_scale = (y1 - y0) / (float)dst_h;
-
-  for (int y = 0; y < dst_h; ++y) {
-    float sy = y0 + (y + 0.5f) * sy_scale;
-    int sy0 = (int)floorf(sy);
-    int sy1 = sy0 + 1;
-    float wy = sy - (float)sy0;
-    sy0 = clampi(sy0, 0, src_h - 1);
-    sy1 = clampi(sy1, 0, src_h - 1);
-
-    for (int x = 0; x < dst_w; ++x) {
-      float sx = x0 + (x + 0.5f) * sx_scale;
-      int sx0 = (int)floorf(sx);
-      int sx1 = sx0 + 1;
-      float wx = sx - (float)sx0;
-      sx0 = clampi(sx0, 0, src_w - 1);
-      sx1 = clampi(sx1, 0, src_w - 1);
-
-      int idx00 = (sy0 * src_w + sx0) * 3;
-      int idx01 = (sy0 * src_w + sx1) * 3;
-      int idx10 = (sy1 * src_w + sx0) * 3;
-      int idx11 = (sy1 * src_w + sx1) * 3;
-
-      float w00 = (1.f - wx) * (1.f - wy);
-      float w01 =        wx  * (1.f - wy);
-      float w10 = (1.f - wx) *        wy;
-      float w11 =        wx  *        wy;
-
-      int didx = (y * dst_w + x) * 3;
-      for (int c = 0; c < 3; ++c) {
-        float v = src_nhwc[idx00 + c] * w00 +
-                  src_nhwc[idx01 + c] * w01 +
-                  src_nhwc[idx10 + c] * w10 +
-                  src_nhwc[idx11 + c] * w11;
-        dst_nhwc[didx + c] = v * 2.f - 1.f;  /* [0..1] -> [-1..1] */
-      }
-    }
+  static int inited = 0;
+  if (!inited) {
+    fr_init();
+    fr_set_subject(FR_SUBJECT_NAME);
+    fr_set_match_threshold(0.80f);
+    inited = 1;
   }
 }
 
-/* Select one best detection (same scoring as runtime) */
-static int select_best_face(const od_pp_out_t *pp, od_pp_outBuffer_t *best_out)
+/* ============================== */
+/*      Public entry point        */
+/* ============================== */
+/* Call this early at boot to dump embeddings from embedded BMP assets. */
+int FR_ExtractEmbeddings_FromAssets(void)
 {
-  if (!pp || pp->nb_detect == 0) return 0;
+  fr_init_once();
 
-  const float ACCEPT_CONF_MIN = 0.70f;
-  const float ACCEPT_SIDE_MIN = 0.28f;
-  const float CENTER_TOL      = 0.60f;
-  const float SCORE_SIDE_REF  = 0.35f;
-
-  float best_score = -1.f;
-  int best_i = -1;
-  for (uint32_t i = 0; i < pp->nb_detect; ++i) {
-    const od_pp_outBuffer_t *d = &pp->pOutBuff[i];
-    float side = fmaxf(d->width, d->height);
-    if (d->conf < ACCEPT_CONF_MIN || side < ACCEPT_SIDE_MIN) continue;
-
-    float dx = fabsf(d->x_center - 0.5f);
-    float dy = fabsf(d->y_center - 0.5f);
-    float r_center = sqrtf(dx*dx + dy*dy);
-    float s_size   = fminf(1.f, side / SCORE_SIDE_REF);
-    float s_center = 1.f - fminf(1.f, r_center / CENTER_TOL);
-    float score = d->conf * (0.25f + 0.75f * s_size) * s_center;
-
-    if (score > best_score) { best_score = score; best_i = (int)i; *best_out = *d; }
-  }
-  return (best_i >= 0);
-}
-
-/* -------- main API -------- */
-
-int FR_Extract_From_RGB888(const uint8_t *rgb,
-                           int img_w, int img_h,
-                           float *out_emb, int out_emb_cap,
-                           od_pp_outBuffer_t *out_roi)
-{
-  if (!rgb || img_w <= 0 || img_h <= 0 || !out_emb || out_emb_cap <= 0) return -1;
-
-  /* 1) DETECTOR INPUT (internal buffer) */
-  const LL_Buffer_InfoTypeDef *det_in = Detector_In_Info();
-  float    *det_in_f32  = (float*)  LL_Buffer_addr_start(&det_in[0]);   /* NHWC floats */
-  uint32_t  det_in_len  =           LL_Buffer_len(&det_in[0]);          /* bytes */
-  const int PIX = NN_WIDTH * NN_HEIGHT;
-  assert(det_in_len >= (uint32_t)(PIX * 3 * sizeof(float)));
-
-  /* Resize+normalize the source image into detector input */
-  resize_rgb888_to_float_nhwc(rgb, img_w, img_h, det_in_f32, NN_WIDTH, NN_HEIGHT);
-
-  /* Cache clean before NPU reads */
-  DCACHE_Clean(det_in_f32, det_in_len);
-
-  /* Prepare outputs for NPU write (clean+invalidate) */
-  {
-    const LL_Buffer_InfoTypeDef *det_out = Detector_Out_Info();
-    for (int i = 0; i < NN_OUT_NB; ++i) {
-      void *oaddr = LL_Buffer_addr_start(&det_out[i]);
-      size_t olen = (size_t)LL_Buffer_len(&det_out[i]);
-#if defined(USE_DCACHE)
-      dcache_align_range(&oaddr, &olen);
-      SCB_CleanInvalidateDCache_by_Addr(oaddr, (int)olen);
-#else
-      (void)oaddr; (void)olen;
-#endif
-    }
+  /* Early out if no assets (still print an empty header for parsers) */
+  if (g_user_bmps_count <= 0) {
+    printf("# data_embeddings (assets)\r\n# count=0\r\n");
+    return 0;
   }
 
-  /* 2) RUN DETECTOR */
-  Detector_Run();  /* NPU lock/unlock handled inside */
-
-  /* 3) POSTPROCESS */
-#if POSTPROCESS_TYPE == POSTPROCESS_CUSTOM
-  static bool pp_inited = false;
-  if (!pp_inited) { app_postprocess_init(NULL); pp_inited = true; }
-#else
-  static bool pp_inited = false;
-  static yolov8_pp_static_param_t pp_params; /* adjust to your POSTPROCESS_* variant */
-  if (!pp_inited) { app_postprocess_init(&pp_params); pp_inited = true; }
-#endif
-
-  const LL_Buffer_InfoTypeDef *det_out = Detector_Out_Info();
-  void *pp_input[NN_OUT_NB];
-  uint32_t pp_len[NN_OUT_NB];
-  for (int i = 0; i < NN_OUT_NB; ++i) {
-    pp_input[i] = LL_Buffer_addr_start(&det_out[i]);
-    pp_len[i]   = LL_Buffer_len(&det_out[i]);
-    DCACHE_Invalidate(pp_input[i], pp_len[i]);
-  }
-
-  od_pp_out_t pp_out = {0};
-#if POSTPROCESS_TYPE == POSTPROCESS_CUSTOM
-  int r = app_postprocess_run((void**)pp_input, NN_OUT_NB, &pp_out, NULL);
-#else
-  int r = app_postprocess_run((void**)pp_input, NN_OUT_NB, &pp_out, &pp_params);
-#endif
-  if (r != 0) return -2;
-
-  if (pp_out.nb_detect == 0) {
-    if (out_roi) memset(out_roi, 0, sizeof(*out_roi));
-    return +1;  /* no face */
-  }
-
-  od_pp_outBuffer_t best = {0};
-  if (!select_best_face(&pp_out, &best)) {
-    if (out_roi) memset(out_roi, 0, sizeof(*out_roi));
-    return +1;  /* faces exist but none passed gating */
-  }
-  if (out_roi) *out_roi = best;
-
-  /* 4) PREPARE FR INPUT (internal or user buffer) */
+  /* Get FaceRec IO buffers */
   const LL_Buffer_InfoTypeDef *fr_in_info  = LL_ATON_Input_Buffers_Info_face_recognition();
-  float    *fr_in      = (float*) LL_Buffer_addr_start(&fr_in_info[0]);  /* NHWC floats */
-  uint32_t  fr_in_len  =          LL_Buffer_len(&fr_in_info[0]);
-
-  assert(fr_in_len >= (uint32_t)(FR_IN_W * FR_IN_H * 3 * sizeof(float)));
-
-  /* Crop the face from the SAME detector input frame (det_in_f32 in [0..1]) */
-  crop_normROI_to_FR_input(det_in_f32, NN_WIDTH, NN_HEIGHT, &best,
-                           fr_in, FR_IN_W, FR_IN_H);
-
-  /* Clean FR input before NPU */
-  DCACHE_Clean(fr_in, fr_in_len);
-
-  /* Prepare FR output */
   const LL_Buffer_InfoTypeDef *fr_out_info = LL_ATON_Output_Buffers_Info_face_recognition();
-  void     *fr_out_ptr = LL_Buffer_addr_start(&fr_out_info[0]);
-  uint32_t  fr_out_len = LL_Buffer_len(&fr_out_info[0]);
+
+  float   *fr_in      = (float*)LL_Buffer_addr_start(&fr_in_info[0]);
+  void    *fr_out     =         LL_Buffer_addr_start(&fr_out_info[0]);
+  uint32_t fr_in_len  = LL_Buffer_len(&fr_in_info[0]);
+  uint32_t fr_out_len = LL_Buffer_len(&fr_out_info[0]);
+
+  const int need_in_bytes = FR_IN_W * FR_IN_H * 3 * (int)sizeof(float);
+  if ((int)fr_in_len < need_in_bytes) {
+    printf("[FR][BOOT][ERR] FR input buffer too small (%lu < %d)\r\n",
+           (unsigned long)fr_in_len, need_in_bytes);
+    printf("# data_embeddings (assets)\r\n# count=0\r\n");
+    return -1;
+  }
 
 #if defined(USE_DCACHE)
-  {
-    void *oaddr = fr_out_ptr;
-    size_t olen = fr_out_len;
-    dcache_align_range(&oaddr, &olen);
-    SCB_CleanInvalidateDCache_by_Addr(oaddr, (int)olen);
-  }
+  { void *o=fr_out; size_t l=fr_out_len; dcache_align_range(&o,&l); SCB_CleanInvalidateDCache_by_Addr(o,(int)l); }
 #endif
 
-  /* 5) RUN FACEREC */
-  FaceRec_Run_NoLock();  /* serialize externally if needed */
+  printf("# data_embeddings (assets)\r\n# count=%d\r\n", g_user_bmps_count);
 
-  /* Invalidate FR output after NPU writes */
+  for (int i=0; i<g_user_bmps_count; ++i) {
+    const EmbeddedBMP *E = &g_user_bmps[i];
+
+    /* Decode BMP header */
+    Bmp24View v;
+    int st = bmp24_open(E->data, E->size, &v);
+    if (st != 0) {
+      printf("[FR][BOOT][WARN] %s: unsupported BMP (err=%d), skipping.\r\n",
+             E->name ? E->name : "img", st);
+      continue;
+    }
+
+    /* Prepare FR input from BMP (center-square → FR_IN_W x FR_IN_H, [-1..1]) */
+    bmp24_center_square_to_fr_input(&v, fr_in, FR_IN_W, FR_IN_H);
+    DCACHE_Clean(fr_in, fr_in_len);   /* CPU -> NPU */
+
+    /* Run FaceRec once */
+    NPU_Lock(TAG_FR);
+    uint32_t t0 = HAL_GetTick();
+    FaceRec_Run_NoLock();
+    uint32_t dt = HAL_GetTick() - t0;
+    NPU_Unlock(TAG_FR);
+
 #if defined(USE_DCACHE)
-  {
-    void *oaddr = fr_out_ptr;
-    size_t olen = fr_out_len;
-    dcache_align_range(&oaddr, &olen);
-    SCB_InvalidateDCache_by_Addr(oaddr, (int)olen);
-  }
+    { void *o=fr_out; size_t l=fr_out_len; dcache_align_range(&o,&l); SCB_InvalidateDCache_by_Addr(o,(int)l); }
 #else
-  DCACHE_Invalidate(fr_out_ptr, fr_out_len);
+    DCACHE_Invalidate(fr_out, fr_out_len);  /* NPU -> CPU */
 #endif
 
-  /* 6) COPY EMBEDDING OUT (clamp size defensively) */
-  int n_f32 = (int)(fr_out_len / (uint32_t)sizeof(float));
-  if (n_f32 > FR_EMB_SIZE) n_f32 = FR_EMB_SIZE;
-  if (n_f32 > out_emb_cap) n_f32 = out_emb_cap;
-  if (n_f32 <= 0) return -3;
+    int emb_dim = (int)(fr_out_len / sizeof(float));
+    if (emb_dim > FR_EMB_SIZE) emb_dim = FR_EMB_SIZE;
+    const float *vec = (const float*)fr_out;
 
-  memcpy(out_emb, fr_out_ptr, (size_t)n_f32 * sizeof(float));
+    /* Print one line per image:  <label>|<dim>|v0,...,vN-1 */
+    const char *label = (E->name && E->name[0]) ? E->name : "img";
+    printf("%s|%d|", label, emb_dim);
+    for (int k=0; k<emb_dim; ++k) {
+      printf((k+1<emb_dim) ? "%.6f," : "%.6f", vec[k]);
+    }
+    printf("\r\n");
+
+    printf("[FR][BOOT] %s ok (%dx%d → %dx%d) in %lums\r\n",
+           label, v.width, v.height_abs, FR_IN_W, FR_IN_H, (unsigned long)dt);
+  }
+
+  printf("[FR][BOOT] Embedding extraction finished.\r\n");
   return 0;
 }

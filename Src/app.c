@@ -58,6 +58,10 @@
 #endif
 #include "utils.h"
 #include "face_recognition.h"
+/* FaceRec dedicated thread */
+static StaticTask_t fr_thread;
+static StackType_t fr_thread_stack[2 * configMINIMAL_STACK_SIZE];
+TaskHandle_t g_fr_task = NULL;
 
 /* FaceRec dedicated user IO (non-aliased, PSRAM) — put qualifiers AFTER the var */
 static float  g_fr_in_user [FR_IN_W * FR_IN_H * 3] ALIGN_32 IN_PSRAM;
@@ -137,7 +141,28 @@ void Detector_Run(void) {
 #define BUTTON_TOGGLE_TRACKING BUTTON_USER
 #endif
 //static float g_last_frame[NN_WIDTH * NN_HEIGHT * 3] ALIGN_32 IN_PSRAM;
+/* Global handle so FaceRec can pause NN during extraction */
+TaskHandle_t g_nn_task = NULL;
 
+static void fr_thread_fct(void *arg)
+{
+  (void)arg;
+  while (1) {
+    // Wait until someone tells this thread to run
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    // [Lock NPU because detector may also run]
+    NPU_Lock(TAG_FR);
+
+    // Run Face Recognition on current face crop
+    FaceRec_Run_NoLock();
+
+    // Postprocess: embeddings are now in g_fr_out_user
+    printf("[FR] Embeddings ready. First val=%.3f\n", g_fr_out_user[0]);
+
+    NPU_Unlock(TAG_FR);
+  }
+}
 
 // --- XSPI1 HyperRAM: enable memory-mapped window @ 0x9000_0000 .. 0x90FF_FFFF
 /* app.c — disable duplicate HyperRAM mapping function */
@@ -1194,22 +1219,36 @@ void app_run()
   CAM_DisplayPipe_Start(lcd_bg_buffer[0], CMW_MODE_CONTINUOUS);
 
   /* Threads */
-  hdl = xTaskCreateStatic(nn_thread_fct, "nn",
-                          configMINIMAL_STACK_SIZE * 2,
-                          NULL,
-                          nn_priority,
-                          nn_thread_stack, &nn_thread);
-  assert(hdl != NULL);
+  /* Threads */
+  g_nn_task = xTaskCreateStatic(nn_thread_fct, "nn",
+                                configMINIMAL_STACK_SIZE * 2,
+                                NULL,
+                                nn_priority,
+                                nn_thread_stack, &nn_thread);
+  assert(g_nn_task != NULL);
+
+
   hdl = xTaskCreateStatic(pp_thread_fct, "pp",
                           configMINIMAL_STACK_SIZE * 2,
                           NULL,
                           pp_priority,
                           pp_thread_stack, &pp_thread);
   assert(hdl != NULL);
-  hdl = xTaskCreateStatic(dp_thread_fct, "dp",  configMINIMAL_STACK_SIZE * 2, NULL, dp_priority, dp_thread_stack, &dp_thread);
+
+  hdl = xTaskCreateStatic(dp_thread_fct, "dp",
+                          configMINIMAL_STACK_SIZE * 2,
+                          NULL,
+                          dp_priority,
+                          dp_thread_stack, &dp_thread);
   assert(hdl != NULL);
-  hdl = xTaskCreateStatic(isp_thread_fct, "isp",configMINIMAL_STACK_SIZE * 2, NULL, isp_priority, isp_thread_stack, &isp_thread);
+
+  hdl = xTaskCreateStatic(isp_thread_fct, "isp",
+                          configMINIMAL_STACK_SIZE * 2,
+                          NULL,
+                          isp_priority,
+                          isp_thread_stack, &isp_thread);
   assert(hdl != NULL);
+
 }
 
 
