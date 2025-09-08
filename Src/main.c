@@ -37,6 +37,7 @@
 #include "stm32n6xx_hal_rif.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "pipeline_start.h"
 UART_HandleTypeDef huart1;
 
 static StaticTask_t main_thread;
@@ -436,7 +437,7 @@ static void main_thread_fct(void *arg)
   LL_MISC_EnableClockLowPower(~0);
 
   /* Start application */
-  app_run();
+  Pipeline_Start();
 
   vTaskDelete(NULL);
 }
