@@ -36,6 +36,90 @@ const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 void FaceRec_Run_NoLock(void);
 const LL_Buffer_InfoTypeDef *Detector_Out_Info(void);
 
+/* ---- Reference set compiled in Generated/embeddings_table.c ---- */
+typedef struct { const char* name; const float* data; int dim; } EmbRec;
+extern const EmbRec g_ref_set[];
+extern const int    g_ref_set_count;
+
+/* ---------------- helpers added for FR ---------------- */
+
+static inline int clampi(int v, int lo, int hi){ return (v<lo)?lo:((v>hi)?hi:v); }
+
+static float cosine_sim(const float *a, const float *b, int n)
+{
+  /* robust FP accumulation */
+  double ab = 0.0, aa = 0.0, bb = 0.0;
+  for (int i = 0; i < n; ++i) {
+    double x = a[i], y = b[i];
+    ab += x * y;  aa += x * x;  bb += y * y;
+  }
+  if (aa <= 0.0 || bb <= 0.0) return 0.0f;
+  double d = ab / (sqrt(aa) * sqrt(bb));
+  if (d >  1.0) d =  1.0;
+  if (d < -1.0) d = -1.0;
+  return (float)d;
+}
+
+/* Crop detector input (float NHWC [0..1], size NN_WIDTH x NN_HEIGHT x 3)
+ * to FaceRec input (float NHWC [-1..1], size FR_IN_W x FR_IN_H x 3) using a
+ * square box around the ROI with a small margin. */
+static void crop_to_facerec_input_from_detector_input(
+    const float *src_nhwc, int src_w, int src_h,
+    const od_pp_outBuffer_t *roi,
+    float *dst_nhwc, int dst_w, int dst_h)
+{
+  /* Make square crop with +10% margin */
+  float cx = roi->x_center * src_w;
+  float cy = roi->y_center * src_h;
+  float bw = roi->width  * src_w;
+  float bh = roi->height * src_h;
+  float side = fmaxf(bw, bh) * 1.10f;  /* +10% */
+  float x0 = cx - side * 0.5f;
+  float y0 = cy - side * 0.5f;
+  float x1 = cx + side * 0.5f;
+  float y1 = cy + side * 0.5f;
+
+  const float sx_scale = (x1 - x0) / (float)dst_w;
+  const float sy_scale = (y1 - y0) / (float)dst_h;
+
+  for (int y=0; y<dst_h; ++y) {
+    float sy = y0 + (y + 0.5f) * sy_scale;
+    int sy0 = (int)floorf(sy);
+    int sy1 = sy0 + 1;
+    float wy = sy - (float)sy0;
+    sy0 = clampi(sy0, 0, src_h-1);
+    sy1 = clampi(sy1, 0, src_h-1);
+
+    for (int x=0; x<dst_w; ++x) {
+      float sx = x0 + (x + 0.5f) * sx_scale;
+      int sx0 = (int)floorf(sx);
+      int sx1 = sx0 + 1;
+      float wx = sx - (float)sx0;
+      sx0 = clampi(sx0, 0, src_w-1);
+      sx1 = clampi(sx1, 0, src_w-1);
+
+      int idx00 = (sy0*src_w + sx0)*3;
+      int idx01 = (sy0*src_w + sx1)*3;
+      int idx10 = (sy1*src_w + sx0)*3;
+      int idx11 = (sy1*src_w + sx1)*3;
+
+      float w00 = (1.f-wx)*(1.f-wy);
+      float w01 = (     wx)*(1.f-wy);
+      float w10 = (1.f-wx)*(     wy);
+      float w11 = (     wx)*(     wy);
+
+      int didx = (y*dst_w + x)*3;
+      for (int c=0;c<3;c++){
+        float v = src_nhwc[idx00+c]*w00 +
+                  src_nhwc[idx01+c]*w01 +
+                  src_nhwc[idx10+c]*w10 +
+                  src_nhwc[idx11+c]*w11;
+        /* Detector input is [0..1]; FaceRec expects [-1..1] */
+        dst_nhwc[didx+c] = v*2.f - 1.f;
+      }
+    }
+  }
+}
 
 static inline float iou_norm_boxes(const od_pp_outBuffer_t *a, const od_pp_outBuffer_t *b)
 {
@@ -91,6 +175,26 @@ void pp_thread_fct(void *arg)
   app_postprocess_init(&pp_params);
 #endif
 
+  /* FaceRec I/O discovery (once) */
+  const LL_Buffer_InfoTypeDef *fr_in_info  = LL_ATON_Input_Buffers_Info_face_recognition();
+  const LL_Buffer_InfoTypeDef *fr_out_info = LL_ATON_Output_Buffers_Info_face_recognition();
+  float   *fr_in      = (float *)LL_Buffer_addr_start(&fr_in_info[0]);
+  void    *fr_out     =          LL_Buffer_addr_start(&fr_out_info[0]);
+  uint32_t fr_in_len  = LL_Buffer_len(&fr_in_info[0]);
+  uint32_t fr_out_len = LL_Buffer_len(&fr_out_info[0]);
+  const int need_in_bytes = FR_IN_W * FR_IN_H * 3 * (int)sizeof(float);
+
+  if (!fr_in || !fr_out || fr_in_len < (uint32_t)need_in_bytes || fr_out_len < sizeof(float)) {
+    printf("[FR][ERR] IO invalid: in=%p (%lu) out=%p (%lu)\n",
+           (void*)fr_in, (unsigned long)fr_in_len, fr_out, (unsigned long)fr_out_len);
+  }
+
+  /* Detector float input (NHWC [0..1]) for cropping */
+  const LL_Buffer_InfoTypeDef *det_in_info = LL_ATON_Input_Buffers_Info_Default();
+  const float *det_in = (const float*)LL_Buffer_addr_start(&det_in_info[0]);
+  const uint32_t det_in_len = LL_Buffer_len(&det_in_info[0]);
+  (void)det_in_len; /* expected NN_WIDTH*NN_HEIGHT*3*sizeof(float) */
+
   /* Simple stabilizer for a single primary box */
   typedef struct {
     od_pp_outBuffer_t roi;
@@ -110,6 +214,11 @@ void pp_thread_fct(void *arg)
   const float     STABLE_IOU_MIN     = 0.30f;
   const int       HOLD_MISS_FRAMES   = 6;
   const float     EMA_ALPHA          = 0.70f;
+
+  /* FR run throttling & decision threshold */
+  uint32_t last_fr_ms = 0;
+  const uint32_t FR_PERIOD_MS = 250;      /* ~4 Hz */
+  const float    MATCH_THR    = 0.55f;    /* cosine threshold for "known" */
 
   while (1)
   {
@@ -222,7 +331,55 @@ void pp_thread_fct(void *arg)
       }
     }
 
-    /* Publish ONLY detection (no FaceRec) */
+    /* ---------- FaceRec match (throttled) ---------- */
+    if (primary.have && det_in && fr_in && fr_out && (now - last_fr_ms >= FR_PERIOD_MS)) {
+      last_fr_ms = now;
+
+      /* Prepare FR input from detector float frame */
+      crop_to_facerec_input_from_detector_input(
+        det_in, NN_WIDTH, NN_HEIGHT,
+        &primary.roi,
+        fr_in, FR_IN_W, FR_IN_H);
+
+      /* Cache: CPU -> NPU */
+      DCACHE_Clean(fr_in, need_in_bytes);
+
+      /* Run FaceRec */
+      NPU_Lock(TAG_FR);
+      uint32_t t0 = HAL_GetTick();
+      FaceRec_Run_NoLock();
+      uint32_t dt = HAL_GetTick() - t0;
+      NPU_Unlock(TAG_FR);
+
+      /* Cache: NPU -> CPU */
+      DCACHE_Invalidate(fr_out, fr_out_len);
+
+      /* Compare to reference set */
+      const float *probe = (const float*)fr_out;
+      int probe_dim = (int)(fr_out_len / sizeof(float));
+      if (probe_dim > FR_EMB_SIZE) probe_dim = FR_EMB_SIZE;
+
+      int best_i = -1;
+      float best_s = -2.0f;
+
+      for (int i = 0; i < g_ref_set_count; ++i) {
+        int dim = (probe_dim < g_ref_set[i].dim) ? probe_dim : g_ref_set[i].dim;
+        if (dim <= 0) continue;
+        float s = cosine_sim(probe, g_ref_set[i].data, dim);
+        if (s > best_s) { best_s = s; best_i = i; }
+      }
+
+      const char *name = "Unknown";
+      if (best_i >= 0 && g_ref_set[best_i].name && g_ref_set[best_i].name[0] && best_s >= MATCH_THR) {
+        name = g_ref_set[best_i].name;
+      }
+
+      /* Update overlay text */
+      snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "%s  %.2f", name, best_s);
+      printf("[FR] match: %s  cos=%.3f  (dt=%lums)\n", name, best_s, (unsigned long)dt);
+    }
+
+    /* Publish ONLY detection (overlay text handled by Display via g_fr_overlay_label) */
     int lock = xSemaphoreTake(disp.lock, portMAX_DELAY);  assert(lock == pdTRUE);
 
     if (primary.have) {
@@ -245,4 +402,3 @@ void pp_thread_fct(void *arg)
     xSemaphoreGive(disp.update);
   }
 }
-

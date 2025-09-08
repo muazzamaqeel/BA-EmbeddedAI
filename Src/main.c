@@ -38,6 +38,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "pipeline_start.h"
+
+#include "xspi_debug.h"
 UART_HandleTypeDef huart1;
 
 static StaticTask_t main_thread;
@@ -77,13 +79,32 @@ static int HyperRAM_Map_Once(void)
 }
 
 
-// --- XSPI1 HyperRAM: enable memory-mapped window @ 0x9000_0000 .. 0x90FF_FFFF
 
-/**
-  * @brief  Main program
-  * @param  None
-  * @retval None
-  */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 int main(void)
 {
   /* Power on ICACHE */
@@ -405,6 +426,9 @@ static void main_thread_fct(void *arg)
       Error_Handler();
     } else {
       printf("[XSPI-NOR] Mapped OK on inst=%d\r\n", used);
+      /* --- Check contents --- */
+      xspi_quick_check();
+      xspi_crc_check();
     }
   }
 
