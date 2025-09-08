@@ -33,6 +33,9 @@ extern volatile char g_fr_overlay_label[32];
 const LL_Buffer_InfoTypeDef *LL_ATON_Input_Buffers_Info_face_recognition(void);
 const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 
+void FaceRec_Run_NoLock(void);
+const LL_Buffer_InfoTypeDef *Detector_Out_Info(void);
+
 
 static inline float iou_norm_boxes(const od_pp_outBuffer_t *a, const od_pp_outBuffer_t *b)
 {
@@ -443,7 +446,9 @@ void pp_thread_fct(void *arg)
           snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "%s", FR_SUBJECT_NAME);
           printf("[FR][VOTE] fast-accept (sim=%.3f, prev=%.3f, thr=%.3f)\n", sim, last_sim, thr_eff);
           /* reset window */
-          for (int i=0;i<5;i++) vote_win[i]=255; vote_idx=0; vote_filled=0;
+          for (int i = 0; i < 5; i++) { vote_win[i] = 255; }
+          vote_idx = 0;
+          vote_filled = 0;
         } else {
           /* Deadband voting around threshold */
           int vote;

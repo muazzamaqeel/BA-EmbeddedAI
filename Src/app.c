@@ -931,36 +931,6 @@ static inline float iou_norm_boxes(const od_pp_outBuffer_t *a, const od_pp_outBu
 
 
 
-
-
-
-
-static od_pp_outBuffer_t enroll_anchor;
-static int anchor_set = 0;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 static void dp_update_drawing_area()
 {
   int ret;
