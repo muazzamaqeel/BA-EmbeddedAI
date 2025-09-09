@@ -40,6 +40,8 @@
 #include "app_postprocess.h"
 #include "isp_api.h"
 #include "ll_aton_runtime.h"
+#include "ll_aton_rt_user_api.h"
+
 #include "cmw_camera.h"
 #include "scrl.h"
 #include "stm32_lcd.h"
@@ -63,20 +65,21 @@ static StaticTask_t fr_thread;
 static StackType_t fr_thread_stack[2 * configMINIMAL_STACK_SIZE];
 TaskHandle_t g_fr_task = NULL;
 
-/* FaceRec dedicated user IO (non-aliased, PSRAM) — put qualifiers AFTER the var */
-static float  g_fr_in_user [FR_IN_W * FR_IN_H * 3] ALIGN_32 IN_PSRAM;
-static float  g_fr_out_user[FR_EMB_SIZE] ALIGN_32 IN_PSRAM;
+/* was: static float  g_fr_in_user [FR_IN_W * FR_IN_H * 3] ALIGN_32; */
+static uint8_t g_fr_in_user [FR_IN_W * FR_IN_H * 3] ALIGN_32;
 
-
+/* was: static float  g_fr_out_user[FR_EMB_SIZE]           ALIGN_32; */
+static int8_t  g_fr_out_user[FR_EMB_SIZE]           ALIGN_32;
 
 // Wrappers so other files don't need to see NN_Instance_Default
 LL_ATON_DECLARE_NAMED_NN_INSTANCE_AND_INTERFACE(Default);
+// Declaration only
 LL_ATON_DECLARE_NAMED_NN_INSTANCE_AND_INTERFACE(face_recognition);
 
-/* Runs FaceRec on the static instance; no locks here (caller handles locking) */
 void FaceRec_Run_NoLock(void) {
     LL_ATON_RT_Main(&NN_Instance_face_recognition);
 }
+
 
 // ---- NOW add the wrappers ----
 const LL_Buffer_InfoTypeDef *Detector_In_Info(void)  { return LL_ATON_Input_Buffers_Info_Default(); }
