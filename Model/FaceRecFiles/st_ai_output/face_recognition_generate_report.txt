@@ -1,6 +1,6 @@
 ST Edge AI Core v2.2.0-20266 2adc00962
-Created date          : 2025-09-09 18:22:53
-Parameters            : generate --model .\facenet_512_int_quant.tflite --type tflite --target stm32n6 --st-neural-art profile-default --input-data-type uint8 --output-data-type int8 --allocate-inputs --allocate-outputs --name face_recognition --output .\st_ai_output_face_recognition
+Created date          : 2025-09-10 12:31:37
+Parameters            : generate --model facenet_512_int_quant.tflite --target stm32n6 --st-neural-art default@C:\STM32_FaceRecognition\BA-EmbeddedAI\Model\FaceRecFiles\user_neuralart_STM32N6570-DK.json --input-data-type uint8 --output-data-type int8 --name face_recognition --no-inputs-allocation --no-outputs-allocation --workspace C:\STM32_FaceRecognition\BA-EmbeddedAI\Model\FaceRecFiles\st_ai_ws_faceid_0x71040000
 
 Model name - facenet_512_int_quant
 ------ -------------------------------------- ----------------------- ----------------- ------------- -------------------------------- 
@@ -570,10 +570,10 @@ model: macc=1,423,069,232 weights=23,575,200 activations=-- io=--
 Compilation details
 ------------------------------------------------------------------------------------
 Compiler version: 1.1.1-14
-Compiler arguments:  -i C:\Users\Muazzam\Downloads\facenet-master\facenet-master\src\models\st_ai_output_face_recognition\facenet_512_int_quant_OE_3_3_0.onnx --json-quant-file C:\Users\Muazzam\Downloads\facenet-master\facenet-master\src\models\st_ai_output_face_recognition\facenet_512_int_quant_OE_3_3_0_Q.json -g face_recognition.c --load-mdesc C:\ST\STEdgeAI\2.2\Utilities\configs\stm32n6.mdesc --load-mpool C:\ST\STEdgeAI\2.2\Utilities\windows\targets\stm32\resources\mpools\stm32n6.mpool --save-mpool-file C:\Users\Muazzam\Downloads\facenet-master\facenet-master\src\models\st_ai_ws\neural_art__face_recognition\stm32n6.mpool --out-dir-prefix C:\Users\Muazzam\Downloads\facenet-master\facenet-master\src\models\st_ai_ws\neural_art__face_recognition/ --native-float --mvei --cache-maintenance --Ocache-opt --enable-virtual-mem-pools --Os --Oauto-sched --output-info-file c_info.json --network-name face_recognition
+Compiler arguments:  -i C:\STM32_FaceRecognition\BA-EmbeddedAI\Model\FaceRecFiles\st_ai_output\facenet_512_int_quant_OE_3_3_0.onnx --json-quant-file C:\STM32_FaceRecognition\BA-EmbeddedAI\Model\FaceRecFiles\st_ai_output\facenet_512_int_quant_OE_3_3_0_Q.json -g face_recognition.c --load-mdesc C:\ST\STEdgeAI\2.2\Utilities\configs\stm32n6.mdesc --load-mpool C:\STM32_FaceRecognition\BA-EmbeddedAI\Model\FaceRecFiles\my_mpools\stm32n6_faceid_0x71040000.mpool --save-mpool-file C:\STM32_FaceRecognition\BA-EmbeddedAI\Model\FaceRecFiles\st_ai_ws_faceid_0x71040000\neural_art__face_recognition\stm32n6_faceid_0x71040000.mpool --out-dir-prefix C:\STM32_FaceRecognition\BA-EmbeddedAI\Model\FaceRecFiles\st_ai_ws_faceid_0x71040000\neural_art__face_recognition/ --all-buffers-info --mvei --cache-maintenance --Ocache-opt --enable-virtual-mem-pools --Os --Oauto-sched --native-float --output-info-file c_info.json --network-name face_recognition
 ====================================================================================
 
-Memory usage information  (input/output buffers are included in activations)
+Memory usage information 
 ------------------------------------------------------------------------------------
 	flexMEM    [0x34000000 - 0x34000000]:          0  B /          0  B  (  0.00 % used) -- weights:          0  B (  0.00 % used)  activations:          0  B (  0.00 % used)
 	cpuRAM1    [0x34064000 - 0x34064000]:          0  B /          0  B  (  0.00 % used) -- weights:          0  B (  0.00 % used)  activations:          0  B (  0.00 % used)
@@ -582,17 +582,22 @@ Memory usage information  (input/output buffers are included in activations)
 	npuRAM4    [0x34270000 - 0x342E0000]:          0  B /    448.000 kB  (  0.00 % used) -- weights:          0  B (  0.00 % used)  activations:          0  B (  0.00 % used)
 	npuRAM5    [0x342E0000 - 0x34350000]:    412.266 kB /    448.000 kB  ( 92.02 % used) -- weights:          0  B (  0.00 % used)  activations:    412.266 kB ( 92.02 % used)
 	npuRAM6    [0x34350000 - 0x343C0000]:          0  B /    448.000 kB  (  0.00 % used) -- weights:          0  B (  0.00 % used)  activations:          0  B (  0.00 % used)
-	octoFlash  [0x71000000 - 0x78000000]:     22.844 MB /    112.000 MB  ( 20.40 % used) -- weights:     22.844 MB ( 20.40 % used)  activations:          0  B (  0.00 % used)
+	octoFlash  [0x71040000 - 0x78000000]:     22.844 MB /    111.750 MB  ( 20.44 % used) -- weights:     22.844 MB ( 20.44 % used)  activations:          0  B (  0.00 % used)
 	hyperRAM   [0x90000000 - 0x92000000]:          0  B /     32.000 MB  (  0.00 % used) -- weights:          0  B (  0.00 % used)  activations:          0  B (  0.00 % used)
 ---
 Total:                                            23.247 MB                                  -- weights:     22.844 MB                  activations:    412.266 kB                   
+====================================================================================
+
+Memory to be allocated by the user: inputs (75.000 kB), outputs (512  B)
+	Input [0]:     75.000 kB
+	Output[0]:        512  B
 ====================================================================================
 
 
 Used memory ranges
 ------------------------------------------------------------------------------------
 	npuRAM5    [0x342E0000 - 0x34350000]: 0x342E0000-0x34347110
-	octoFlash  [0x71000000 - 0x78000000]: 0x71000000-0x726D80B0
+	octoFlash  [0x71040000 - 0x78000000]: 0x71040000-0x727180B0
 ====================================================================================
 
 Epochs details
@@ -865,18 +870,18 @@ epoch 260    -SW-   (   QuantizeLinear   )
  ------------------------------- -------- ------------ ------ --------- 
  module                              text       rodata   data       bss 
  ------------------------------- -------- ------------ ------ --------- 
- face_recognition.o                49,132      589,145      0         0 
+ face_recognition.o                49,284      625,602      0         8 
  NetworkRuntime1020_CM55_GCC.a      4,512            0      0         0 
  lib (toolchain)*                     902          624      0         0 
  ll atonn runtime                   7,142        2,287      0        29 
  ------------------------------- -------- ------------ ------ --------- 
- RT total**                        61,688      592,056      0        29 
+ RT total**                        61,840      628,513      0        37 
  ------------------------------- -------- ------------ ------ --------- 
  weights                                0   23,953,569      0         0 
  activations                            0            0      0   422,160 
- io                                     0            0      0         0 
+ io                                     0            0      0    77,312 
  ------------------------------- -------- ------------ ------ --------- 
- TOTAL                             61,688   24,545,625      0   422,189 
+ TOTAL                             61,840   24,582,082      0   499,509 
  ------------------------------- -------- ------------ ------ --------- 
  *  toolchain objects (libm/libgcc*)
  ** RT AI runtime objects (kernels+infrastructure)
@@ -885,9 +890,9 @@ epoch 260    -SW-   (   QuantizeLinear   )
   -------------------------------------------------
                FLASH (ro)     %*   RAM (rw)      % 
   -------------------------------------------------
-  RT total        653,744   2.7%         29   0.0% 
+  RT total        690,353   2.8%         37   0.0% 
   -------------------------------------------------
-  TOTAL        24,607,313           422,189        
+  TOTAL        24,643,922           499,509        
   -------------------------------------------------
   *  rt/total
 

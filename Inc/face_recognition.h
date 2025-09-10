@@ -2,7 +2,7 @@
   ******************************************************************************
   * @file    face_recognition.h
   * @author  STEdgeAI
-  * @date    2025-09-09 18:22:40
+  * @date    2025-09-10 12:31:26
   * @brief   Minimal description of the generated c-implemention of the network
   ******************************************************************************
   * @attention
@@ -23,8 +23,8 @@
 #define LL_ATON_FACE_RECOGNITION_ORIGIN_MODEL_NAME   "facenet_512_int_quant"
 
 /************************** USER ALLOCATED IOs ********************************/
-// No user allocated inputs
-// No user allocated outputs
+#define LL_ATON_FACE_RECOGNITION_USER_ALLOCATED_INPUTS   (1)  // Number of input buffers not allocated by the compiler
+#define LL_ATON_FACE_RECOGNITION_USER_ALLOCATED_OUTPUTS  (1)  // Number of output buffers not allocated by the compiler
 
 /************************** INPUTS ********************************************/
 #define LL_ATON_FACE_RECOGNITION_IN_NUM        (1)    // Total number of input buffers

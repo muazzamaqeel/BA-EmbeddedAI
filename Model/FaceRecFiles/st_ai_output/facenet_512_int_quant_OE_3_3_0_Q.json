@@ -9,13 +9,13 @@
                 }
             ],
             "name": "network",
-            "generated_time": "2025-09-09T18:22:16+0200"
+            "generated_time": "2025-09-10T12:31:13+0200"
         },
         "tools": [
             {
                 "name": "ST.EdgeAI.Core",
                 "version": "2.2.0-20266 2adc00962",
-                "arguments": "generate --model .\\facenet_512_int_quant.tflite --type tflite --target stm32n6 --st-neural-art profile-default --input-data-type uint8 --output-data-type int8 --allocate-inputs --allocate-outputs --name face_recognition --output .\\st_ai_output_face_recognition",
+                "arguments": "generate --model facenet_512_int_quant.tflite --target stm32n6 --st-neural-art default@C:\\STM32_FaceRecognition\\BA-EmbeddedAI\\Model\\FaceRecFiles\\user_neuralart_STM32N6570-DK.json --input-data-type uint8 --output-data-type int8 --name face_recognition --no-inputs-allocation --no-outputs-allocation --workspace C:\\STM32_FaceRecognition\\BA-EmbeddedAI\\Model\\FaceRecFiles\\st_ai_ws_faceid_0x71040000",
                 "environment": [],
                 "input_model": {
                     "model_files": [
@@ -32,7 +32,7 @@
             }
         ],
         "test_name": "",
-        "network_signature": "0x65c3865b67840209"
+        "network_signature": "0x00416a166216bc4a"
     },
     "model_info": {
         "original_inputs": [
@@ -114,7 +114,7 @@
             },
             "data_channel_position": "CHLAST",
             "data_channel_batch": 1,
-            "user_allocated": false
+            "user_allocated": true
         },
         "Transpose_1_out_0": {
             "format": {
@@ -154607,7 +154607,7 @@
             },
             "data_channel_position": "CHFIRST",
             "data_channel_batch": 1,
-            "user_allocated": false
+            "user_allocated": true
         }
     },
     "nodes": {

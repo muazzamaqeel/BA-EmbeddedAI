@@ -674,12 +674,65 @@ static void Display_NetworkOutput(display_info_t *info)
 
 
 
+/* Binds our user buffers to the generated FaceRec network using the lengths
+ * that the runtime reports (so sizes always match the compiled model).      */
+
 static const char* aton_io_errstr(int r){
   if (r == LL_ATON_User_IO_NOERROR)     return "NOERROR";
   if (r == LL_ATON_User_IO_WRONG_INDEX) return "WRONG_INDEX";
   if (r == LL_ATON_User_IO_WRONG_SIZE)  return "WRONG_SIZE";
   return "?";
 }
+
+/* User buffers (already declared in your file) */
+extern uint8_t g_fr_in_user [FR_IN_W * FR_IN_H * 3];
+extern int8_t  g_fr_out_user[FR_EMB_SIZE];
+
+static bool FR_UserIO_InitAndBind(void)
+{
+  /* Ask the runtime what it really expects */
+  const LL_Buffer_InfoTypeDef *exp_in  = LL_ATON_Input_Buffers_Info_face_recognition();
+  const LL_Buffer_InfoTypeDef *exp_out = LL_ATON_Output_Buffers_Info_face_recognition();
+  const uint32_t need_in  = LL_Buffer_len(&exp_in[0]);   /* expect 160*160*3 = 76800 */
+  const uint32_t need_out = LL_Buffer_len(&exp_out[0]);  /* expect 512 */
+
+  printf("[FR] expected lens: IN=%lu  OUT=%lu\r\n",
+         (unsigned long)need_in, (unsigned long)need_out);
+  printf("[FR] user buffers:  IN=%p (len=%lu)  OUT=%p (len=%lu)\r\n",
+         (void*)g_fr_in_user,  (unsigned long)sizeof(g_fr_in_user),
+         (void*)g_fr_out_user, (unsigned long)sizeof(g_fr_out_user));
+
+  /* Safety check: our arrays must be large enough */
+  if (sizeof(g_fr_in_user)  < need_in  ||
+      sizeof(g_fr_out_user) < need_out) {
+    printf("[FR][ERR] user buffers too small (have_in=%lu need_in=%lu, have_out=%lu need_out=%lu)\r\n",
+           (unsigned long)sizeof(g_fr_in_user),  (unsigned long)need_in,
+           (unsigned long)sizeof(g_fr_out_user), (unsigned long)need_out);
+    return false;
+  }
+
+  /* Bind using the runtime-reported lengths */
+  int r_in  = LL_ATON_Set_User_Input_Buffer_face_recognition (0, (void*)g_fr_in_user,  need_in);
+  int r_out = LL_ATON_Set_User_Output_Buffer_face_recognition(0, (void*)g_fr_out_user, need_out);
+  printf("[FR] bind IO: in=%s out=%s\r\n", aton_io_errstr(r_in), aton_io_errstr(r_out));
+
+  /* Re-check what the runtime actually uses (should be our pointers) */
+  const LL_Buffer_InfoTypeDef *chk_in  = LL_ATON_Input_Buffers_Info_face_recognition();
+  const LL_Buffer_InfoTypeDef *chk_out = LL_ATON_Output_Buffers_Info_face_recognition();
+  void *p_in  = LL_Buffer_addr_start(&chk_in[0]);
+  void *p_out = LL_Buffer_addr_start(&chk_out[0]);
+  printf("[FR] post-bind addrs: IN=%p OUT=%p  (in_len=%lu out_len=%lu)\r\n",
+         p_in, p_out,
+         (unsigned long)LL_Buffer_len(&chk_in[0]),
+         (unsigned long)LL_Buffer_len(&chk_out[0]));
+
+  bool ok = (r_in == LL_ATON_User_IO_NOERROR) && (r_out == LL_ATON_User_IO_NOERROR);
+  if (!ok) {
+    printf("[FR][WARN] user-IO binding not active — runtime will use internal buffers.\r\n");
+  }
+  return ok;
+}
+
 
 
 
@@ -1207,6 +1260,8 @@ void app_run()
          (unsigned long)LL_Buffer_len(&chk_in [0]),
          (unsigned long)LL_Buffer_len(&chk_out[0]));
 
+
+
   if (p_in == p_out) {
     printf("[FR][WARN] IN and OUT alias at %p — this network was exported in-place; "
            "we’ll keep using shadow copy + strict cache discipline.\r\n", p_in);
@@ -1214,6 +1269,8 @@ void app_run()
 
   /* FR init after I/O handling */
   fr_init();
+  printf("[FR][CFG] input=%dx%d, out=%d (from face_recognition.h)\r\n",
+         FR_IN_W, FR_IN_H, FR_EMB_SIZE);
   fr_set_subject(FR_SUBJECT_NAME);
   fr_set_match_threshold(0.80f);
 
