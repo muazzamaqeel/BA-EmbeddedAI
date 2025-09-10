@@ -2,24 +2,10 @@
 #pragma once
 
 #include <stdint.h>
-#include "od_pp_output_if.h"   // <-- USE THE OFFICIAL TYPE DEF FOR od_pp_outBuffer_t
+#include "od_pp_output_if.h"   // official type for od_pp_outBuffer_t
+#include "fr_model_cfg.h"      // <-- NEW: always pull FR_IN_W/FR_IN_H/FR_EMB_SIZE from generated header
 
-/* ---------- public config (kept here for completeness) ---------- */
-#ifndef FR_EMB_SIZE
-#define FR_EMB_SIZE         512
-#endif
-#ifndef FR_IN_W
-#define FR_IN_W             112
-#endif
-#ifndef FR_IN_H
-#define FR_IN_H             112
-#endif
-#ifndef NN_WIDTH
-#define NN_WIDTH            128
-#endif
-#ifndef NN_HEIGHT
-#define NN_HEIGHT           128
-#endif
+/* ---------- public config (tunable thresholds, not sizes) ---------- */
 #ifndef FR_DEFAULT_MATCH_THR
 #define FR_DEFAULT_MATCH_THR 0.80f
 #endif
