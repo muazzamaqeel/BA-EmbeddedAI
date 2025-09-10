@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include "od_pp_output_if.h"   // official type for od_pp_outBuffer_t
-#include "fr_model_cfg.h"      // <-- NEW: always pull FR_IN_W/FR_IN_H/FR_EMB_SIZE from generated header
+#include "fr_model_cfg.h"      // <-- always pull FR_IN_W/FR_IN_H/FR_EMB_SIZE from generated header
 
 /* ---------- public config (tunable thresholds, not sizes) ---------- */
 #ifndef FR_DEFAULT_MATCH_THR
@@ -25,6 +25,7 @@
 /* ---------- API ---------- */
 void  fr_init(void);
 void  fr_update_frame_snapshot(const float *src_nhwc, uint32_t bytes);
+void  fr_get_frame_snapshot(const void **ptr, uint32_t *len);
 
 void  fr_prepare_input_for_det(const od_pp_outBuffer_t *d,
                                float *fr_in, int fr_w, int fr_h,
@@ -43,3 +44,7 @@ void  fr_check_alias(const void *in_ptr, const void *out_ptr);
 /* Progress & effective threshold (used by pp_thread_fct) */
 int   fr_get_enroll_progress(int *count_out, int *target_out);
 float fr_get_effective_threshold(void);
+
+/* Optional subject label helpers */
+void        fr_set_subject(const char *name);
+const char* fr_get_subject(void);

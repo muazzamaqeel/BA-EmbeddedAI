@@ -1,5 +1,16 @@
-#include <stdint.h>
+/* embeddings_table.c */
+#include <stddef.h>
+#include "app_config.h"         // <-- contains FR_EMB_SIZE now
+
+#ifndef FR_EMB_SIZE
+#define FR_EMB_SIZE 512
+#endif
+
+/* ... your emb_0, emb_1, emb_2, emb_3, emb_4 arrays unchanged ... */
+
 typedef struct { const char* name; const float* data; int dim; } EmbRec;
+
+
 static const float emb_0[] = {
   0.00784150,   -0.01568300,   -0.03136601,   0.01568300,   -0.00784150,   0.04704901,   -0.10193952,   0.03136601,
   -0.02352450,   0.04704901,   0.05489051,   0.05489051,   -0.01568300,   -0.07841501,   0.02352450,   -0.03136601,
@@ -331,11 +342,14 @@ static const float emb_4[] = {
   -0.00784150,   0.00784150,   -0.05489051,   0.00784150,   -0.00784150,   -0.03136601,   -0.02352450,   0.00784150
 };
 
+#define REF_NAME "Muazzam"
+
 const EmbRec g_ref_set[] = {
-  { "1", emb_0, (int)(sizeof(emb_0)/sizeof(float)) },
-  { "2", emb_1, (int)(sizeof(emb_1)/sizeof(float)) },
-  { "3", emb_2, (int)(sizeof(emb_2)/sizeof(float)) },
-  { "4", emb_3, (int)(sizeof(emb_3)/sizeof(float)) },
-  { "5", emb_4, (int)(sizeof(emb_4)/sizeof(float)) },
+  { REF_NAME, emb_0, FR_EMB_SIZE },
+  { REF_NAME, emb_1, FR_EMB_SIZE },
+  { REF_NAME, emb_2, FR_EMB_SIZE },
+  { REF_NAME, emb_3, FR_EMB_SIZE },
+  { REF_NAME, emb_4, FR_EMB_SIZE },
 };
+
 const int g_ref_set_count = (int)(sizeof(g_ref_set)/sizeof(g_ref_set[0]));

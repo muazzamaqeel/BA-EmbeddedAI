@@ -65,10 +65,12 @@ static StaticTask_t fr_thread;
 static StackType_t fr_thread_stack[2 * configMINIMAL_STACK_SIZE];
 TaskHandle_t g_fr_task = NULL;
 
-/* was: static float  g_fr_in_user [FR_IN_W * FR_IN_H * 3] ALIGN_32; */
+#if FR_IN_IS_UINT8
 static uint8_t g_fr_in_user [FR_IN_W * FR_IN_H * 3] ALIGN_32;
+#else
+static int8_t  g_fr_in_user [FR_IN_W * FR_IN_H * 3] ALIGN_32;
+#endif
 
-/* was: static float  g_fr_out_user[FR_EMB_SIZE]           ALIGN_32; */
 static int8_t  g_fr_out_user[FR_EMB_SIZE]           ALIGN_32;
 
 // Wrappers so other files don't need to see NN_Instance_Default
@@ -161,7 +163,7 @@ static void fr_thread_fct(void *arg)
     FaceRec_Run_NoLock();
 
     // Postprocess: embeddings are now in g_fr_out_user
-    printf("[FR] Embeddings ready. First val=%.3f\n", g_fr_out_user[0]);
+    printf("[FR] Embeddings ready: First val=%.3f\n", (float)g_fr_out_user[0] * (1.0f/128.0f));
 
     NPU_Unlock(TAG_FR);
   }

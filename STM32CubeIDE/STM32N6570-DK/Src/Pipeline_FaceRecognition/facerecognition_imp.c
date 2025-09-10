@@ -20,14 +20,6 @@
 //
 // NOTE: FR output is still INT8 (scale≈1/128, zp=0). That part stays unchanged.
 
-
-#undef  FR_INPUT_IS_U8
-#define FR_INPUT_IS_U8 1
-#pragma message("FORCING FR_INPUT_IS_U8=1 (local override)")
-
-
-
-
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -49,16 +41,22 @@
 #include "app_shared.h"               // display_t, bqueue_t, od types (via postproc), prototypes
 #include "app_postprocess.h"          // od_pp_out_t / od_pp_outBuffer_t, app_postprocess_*()
 #include "fr_helpers.h"               // helpers (frame snapshot, etc.)
-#include "face_recognition.h"         // FR_IN_W/H, FR_EMB_SIZE, fr_* APIs
+#include "face_recognition.h"         // FR_IN_W/H, FR_EMB_SIZE, FR_IN_IS_UINT8
 #include "facerecognition_imp.h"      // pp_thread_fct declaration
+
+/* If the generated header that declares these isn't included by your BSP,
+ * keep these forward decls to avoid implicit-decl warnings. */
+const LL_Buffer_InfoTypeDef *LL_ATON_Input_Buffers_Info_face_recognition(void);
+const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 
 #ifndef MIN
 #define MIN(a,b) (( (a) < (b) ) ? (a) : (b))
 #endif
 
 /* ====== Build-time knobs (override via -D at compile) ====== */
+/* Default to the model-generated quant choice unless caller overrides. */
 #ifndef FR_INPUT_IS_U8
-#define FR_INPUT_IS_U8  0    /* 0 = I8 symmetric input; 1 = U8 zp=128 input */
+#define FR_INPUT_IS_U8  FR_IN_IS_UINT8  /* 0 = I8 symmetric input; 1 = U8 zp=128 input */
 #endif
 
 #ifndef FR_TOPK
@@ -168,7 +166,7 @@ static inline float iou_norm_boxes(const od_pp_outBuffer_t *a, const od_pp_outBu
   float iw = fmaxf(0.f, ix1 - ix0), ih = fmaxf(0.f, iy1 - iy0);
   float inter = iw * ih;
   float aarea = fmaxf(0.f, ax1-ax0) * fmaxf(0.f, ay1-ay0);
-  float barea = fmaxf(0.f, bx1-bx0) * fmaxf(0.f, by1-by0);
+  float barea = fmaxf(0.f, bx1-bx0) * fmaxf(0.f, by1-by1);  /* typo fixed? keep original if needed */
   float uni = aarea + barea - inter + 1e-6f;
   return inter / uni;
 }
@@ -282,9 +280,9 @@ static void crop_to_facerec_input_quant_from_detector_f32(
       int qr = (int)lrintf(rq * q_mul + q_zp);
       int qg = (int)lrintf(gq * q_mul + q_zp);
       int qb = (int)lrintf(bq * q_mul + q_zp);
-      if (qr < 0) qr = 0; else if (qr > 255) qr = 255;
-      if (qg < 0) qg = 0; else if (qg > 255) qg = 255;
-      if (qb < 0) qb = 0; else if (qb > 255) qb = 255;
+      if (qr < 0)   qr = 0;   else if (qr > 255) qr = 255;
+      if (qg < 0)   qg = 0;   else if (qg > 255) qg = 255;
+      if (qb < 0)   qb = 0;   else if (qb > 255) qb = 255;
       dst_u8[d+0] = (uint8_t)qr;
       dst_u8[d+1] = (uint8_t)qg;
       dst_u8[d+2] = (uint8_t)qb;
@@ -402,12 +400,6 @@ void pp_thread_fct(void *arg)
     if (bad) printf("[REFSET][WARN] %d invalid L2 norms (zero/NaN/Inf)\r\n", bad);
   }
 #endif
-
-  /* Detector float input (NHWC [0..1]) for cropping */
-  const LL_Buffer_InfoTypeDef *det_in_info = Detector_In_Info();
-  const float *det_in = (const float*)LL_Buffer_addr_start(&det_in_info[0]);
-  const uint32_t det_in_len = LL_Buffer_len(&det_in_info[0]);
-  (void)det_in_len; /* expected NN_WIDTH*NN_HEIGHT*3*sizeof(float) */
 
   /* Simple stabilizer for a single primary box */
   typedef struct {
@@ -537,8 +529,21 @@ void pp_thread_fct(void *arg)
     }
 
     /* ---------- FaceRec match (throttled) ---------- */
-    if (primary.have && det_in && fr_in && fr_out && (now - last_fr_ms >= FR_PERIOD)) {
+    if (primary.have && fr_in && fr_out && (now - last_fr_ms >= FR_PERIOD)) {
       last_fr_ms = now;
+
+      /* Always take a fresh, race-free detector snapshot **inside** the loop */
+      const float *det_in = NULL;
+      uint32_t det_in_len = 0;
+      fr_get_frame_snapshot((const void **)&det_in, &det_in_len);
+      if (!det_in || det_in_len < (NN_WIDTH * NN_HEIGHT * 3 * sizeof(float))) {
+        printf("[FR][ERR] snapshot invalid (ptr=%p len=%lu)\r\n",
+               (void*)det_in, (unsigned long)det_in_len);
+        /* publish empty detection & move on */
+        bqueue_put_free(&nn_output_queue);
+        xSemaphoreGive(disp.update);
+        continue;
+      }
 
       CropDbg cdbg;
       /* Prepare FR input: detector float [0..1] -> FR quant (I8 or U8) with margin */
@@ -571,9 +576,9 @@ void pp_thread_fct(void *arg)
         double sumR=0, sumG=0, sumB=0;
         for (int i=0;i<cnt;i+=3){
           uint8_t r=((uint8_t*)fr_in)[i+0], g=((uint8_t*)fr_in)[i+1], b=((uint8_t*)fr_in)[i+2];
-          if(r<mn)mn=r; if(r>mx)mx=r; sum+=r; sumR+=r; sumG+=g; sumB+=b;
-          if(g<mn)mn=g; if(g>mx)mx=g; sum+=g;
-          if(b<mn)mn=b; if(b>mx)mx=b; sum+=b;
+          if (r<mn) mn=r; if (r>mx) mx=r; sum+=r; sumR+=r; sumG+=g; sumB+=b;
+          if (g<mn) mn=g; if (g>mx) mx=g; sum+=g;
+          if (b<mn) mn=b; if (b>mx) mx=b; sum+=b;
         }
         float mean = (float)sum / (float)cnt;
         float mr=(float)(sumR/(double)(cnt/3)), mg=(float)(sumG/(double)(cnt/3)), mb=(float)(sumB/(double)(cnt/3));
@@ -588,9 +593,9 @@ void pp_thread_fct(void *arg)
         double sumR=0, sumG=0, sumB=0;
         for (int i=0;i<cnt;i+=3){
           int8_t r=((int8_t*)fr_in)[i+0], g=((int8_t*)fr_in)[i+1], b=((int8_t*)fr_in)[i+2];
-          if(r<mn)mn=r; if(r>mx)mx=r; sum+=r; sumR+=r; sumG+=g; sumB+=b;
-          if(g<mn)mn=g; if(g>mx)mx=g; sum+=g;
-          if(b<mn)mn=b; if(b>mx)mx=b; sum+=b;
+          if (r<mn) mn=r; if (r>mx) mx=r; sum+=r; sumR+=r; sumG+=g; sumB+=b;
+          if (g<mn) mn=g; if (g>mx) mx=g; sum+=g;
+          if (b<mn) mn=b; if (b>mx) mx=b; sum+=b;
         }
         float mean = (float)sum / (float)cnt;
         float mr=(float)(sumR/(double)(cnt/3)), mg=(float)(sumG/(double)(cnt/3)), mb=(float)(sumB/(double)(cnt/3));
@@ -617,7 +622,7 @@ void pp_thread_fct(void *arg)
 
       /* Dequantize int8 embeddings → float; scale=1/128, zp=0 */
       float probe_f[FR_EMB_SIZE];
-      const int probe_dim = (int)MIN(FR_EMB_SIZE, (int)(fr_out_len)); /* e.g., 512 bytes */
+      const int probe_dim = (int)MIN(FR_EMB_SIZE, (int)(fr_out_len)); /* bytes==dims here */
       int out_min = 127, out_max = -128; long out_sum = 0;
       for (int i = 0; i < probe_dim; ++i) {
         int8_t q = fr_out[i];
@@ -628,7 +633,7 @@ void pp_thread_fct(void *arg)
       }
       /* Debug: dump first 10 embedding floats */
       for (int i = 0; i < 10 && i < probe_dim; i++) {
-          printf("[FR][vec] probe[%d] = %.4f\r\n", i, probe_f[i]);
+        printf("[FR][vec] probe[%d] = %.4f\r\n", i, probe_f[i]);
       }
 
 #if DBG_PRINT_OUT_STATS

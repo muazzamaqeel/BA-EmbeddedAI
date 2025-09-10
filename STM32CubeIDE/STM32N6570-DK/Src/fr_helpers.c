@@ -6,6 +6,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 #include "stm32n6xx_hal.h"
 
 /* ---------- local DCACHE helpers (TU-private) ---------- */
@@ -48,10 +49,9 @@ void fr_set_subject(const char *name) {
     g_fr_subject[sizeof(g_fr_subject)-1] = 0;
   }
 }
-
 const char* fr_get_subject(void) { return g_fr_subject; }
 
-static float g_last_sim     = -1.f;
+static float g_last_sim      = -1.f;
 static int   g_last_is_match = 0;
 
 /* ---------- utilities ---------- */
@@ -74,15 +74,27 @@ static volatile uint32_t g_snap_idx = 0;
 /* External caller (nn thread) pushes the *float* detector input here. */
 void fr_update_frame_snapshot(const float *src_nhwc, uint32_t bytes)
 {
-  /* write into the non-active bank, then flip atomically */
-  uint32_t write_idx = 1u - g_snap_idx;
+  uint32_t write_idx = 1u - g_snap_idx;               /* write into the non-active bank */
   memcpy(g_det_frame_snap[write_idx], src_nhwc, (size_t)bytes);
-  FR_DCACHE_Clean(g_det_frame_snap[write_idx], (size_t)bytes);  /* CPU->NPU safety */
-  __DMB();                       /* ensure data visible before publishing index */
-  g_snap_idx = write_idx;        /* publish */
+  FR_DCACHE_Clean(g_det_frame_snap[write_idx], (size_t)bytes);  /* CPU write visibility */
+  __DMB();                                            /* ensure data visible before publishing index */
+  g_snap_idx = write_idx;                             /* publish */
   __DMB();
 }
 
+/* NEW: reader API used by pp_thread_fct() to consume a stable snapshot */
+void fr_get_frame_snapshot(const void **ptr, uint32_t *len)
+{
+  if (ptr) *ptr = NULL;
+  if (len) *len = 0;
+
+  __DMB();
+  uint32_t read_idx = g_snap_idx;                     /* single atomic read */
+  __DMB();
+
+  if (ptr) *ptr = (const void *)g_det_frame_snap[read_idx];
+  if (len) *len = (uint32_t)(NN_WIDTH * NN_HEIGHT * 3 * sizeof(float));
+}
 
 /* ===== enrollment (centroid in RAM) ===== */
 #define FR_SAMPLES_TARGET 10  /* number of samples to build the centroid */

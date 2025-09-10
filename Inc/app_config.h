@@ -96,4 +96,26 @@
 #define NN_OUT2_SIZE (384 *  1 * 4)  /* 1536   */
 #define NN_OUT3_SIZE (384 * 16 * 4)  /* 24576  */
 
+
+/* ---------------- Face Recognition (Facenet INT8) ---------------- */
+#ifndef FR_IN_W
+#define FR_IN_W       160           /* matches facenet_512_int_quant.tflite */
+#endif
+#ifndef FR_IN_H
+#define FR_IN_H       160
+#endif
+#ifndef FR_EMB_SIZE
+#define FR_EMB_SIZE   512           /* 512-d embeddings */
+#endif
+
+/* New: data types for FR IO (used by your code) */
+#ifndef FR_IN_IS_UINT8
+#define FR_IN_IS_UINT8 1            /* input buffer is uint8, 160x160x3 -> 76800 bytes */
+#endif
+
+#ifndef FR_OUT_IS_INT8
+#define FR_OUT_IS_INT8 1            /* output buffer is int8, 512 -> 512 bytes */
+#endif
+
+
 #endif /* APP_CONFIG */
