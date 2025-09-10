@@ -2,7 +2,7 @@
   ******************************************************************************
   * @file    face_recognition.h
   * @author  STEdgeAI
-  * @date    2025-09-10 12:31:26
+  * @date    2025-09-10 17:33:44
   * @brief   Minimal description of the generated c-implemention of the network
   ******************************************************************************
   * @attention

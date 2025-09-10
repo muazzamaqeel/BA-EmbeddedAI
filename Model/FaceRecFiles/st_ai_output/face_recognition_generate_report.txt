@@ -1,5 +1,5 @@
 ST Edge AI Core v2.2.0-20266 2adc00962
-Created date          : 2025-09-10 12:31:37
+Created date          : 2025-09-10 17:33:57
 Parameters            : generate --model facenet_512_int_quant.tflite --target stm32n6 --st-neural-art default@C:\STM32_FaceRecognition\BA-EmbeddedAI\Model\FaceRecFiles\user_neuralart_STM32N6570-DK.json --input-data-type uint8 --output-data-type int8 --name face_recognition --no-inputs-allocation --no-outputs-allocation --workspace C:\STM32_FaceRecognition\BA-EmbeddedAI\Model\FaceRecFiles\st_ai_ws_faceid_0x71040000
 
 Model name - facenet_512_int_quant
@@ -870,18 +870,18 @@ epoch 260    -SW-   (   QuantizeLinear   )
  ------------------------------- -------- ------------ ------ --------- 
  module                              text       rodata   data       bss 
  ------------------------------- -------- ------------ ------ --------- 
- face_recognition.o                49,284      625,602      0         8 
+ face_recognition.o                49,284      625,614      0         8 
  NetworkRuntime1020_CM55_GCC.a      4,512            0      0         0 
  lib (toolchain)*                     902          624      0         0 
  ll atonn runtime                   7,142        2,287      0        29 
  ------------------------------- -------- ------------ ------ --------- 
- RT total**                        61,840      628,513      0        37 
+ RT total**                        61,840      628,525      0        37 
  ------------------------------- -------- ------------ ------ --------- 
  weights                                0   23,953,569      0         0 
  activations                            0            0      0   422,160 
  io                                     0            0      0    77,312 
  ------------------------------- -------- ------------ ------ --------- 
- TOTAL                             61,840   24,582,082      0   499,509 
+ TOTAL                             61,840   24,582,094      0   499,509 
  ------------------------------- -------- ------------ ------ --------- 
  *  toolchain objects (libm/libgcc*)
  ** RT AI runtime objects (kernels+infrastructure)
@@ -890,9 +890,9 @@ epoch 260    -SW-   (   QuantizeLinear   )
   -------------------------------------------------
                FLASH (ro)     %*   RAM (rw)      % 
   -------------------------------------------------
-  RT total        690,353   2.8%         37   0.0% 
+  RT total        690,365   2.8%         37   0.0% 
   -------------------------------------------------
-  TOTAL        24,643,922           499,509        
+  TOTAL        24,643,934           499,509        
   -------------------------------------------------
   *  rt/total
 
