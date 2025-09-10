@@ -7,18 +7,30 @@
 //  - Prints FR output stats (int8 min/max/mean, dequant L2 norm, NaN check).
 //  - Audits reference set at startup and prints Top-K matches per frame.
 //  - Tracks embedding self-consistency over time.
+//  - Uses per-channel crop normalization toward mid-gray for U8 paths.
+//  - Optional gamma lift for dim crops.
+//  - Hysteresis-based ID lock to avoid flicker.
+//  - Option to flip FR input color order (BGR vs RGB).
 //
 // Build-time knobs (override with -D):
-//   FR_INPUT_IS_U8=0/1  (0 = INT8 symmetric input; 1 = U8 zp=127 input)
+//   FR_INPUT_IS_U8=0/1      (0 = INT8 symmetric input; 1 = U8 zp=127 input)
+//   FR_INPUT_IS_BGR=0/1     (swap R<->B for FR only; detector stays RGB)
 //   FR_TOPK=3
 //   FR_CROP_MARGIN=0.20f
-//   FR_MATCH_THR=0.50f
+//   FR_MATCH_THR=0.50f      (legacy single-threshold; used as THR_ON default)
+//   FR_THR_ON=0.50f         (lock if candidate >= THR_ON)
+//   FR_THR_OFF=0.40f        (keep lock while score >= THR_OFF)
+//   FR_LOCK_FORGET_FRAMES=15
 //   FR_PERIOD_MS=250
+//   FR_ENABLE_BRIGHTEN=1
+//   FR_BRIGHTEN_TARGET=0.50f      (≈127 in U8)
+//   FR_BRIGHTEN_GAIN_MIN=0.80f
+//   FR_BRIGHTEN_GAIN_MAX=1.50f
+//   FR_ENABLE_GAMMA=1
+//   FR_GAMMA=0.92f                (lift mids if dim)
+//   FR_GAMMA_THRESH=0.45f         (apply gamma if meanRGB < thresh)
 //
-// If you see [FR][in] I8 stats mean ≪ 0 (e.g., ~-90), your network likely expects U8 input.
-// Rebuild with:  -DFR_INPUT_IS_U8=1
-//
-// NOTE: FR output is still INT8 (scale≈1/128, zp=0). That part stays unchanged.
+// NOTE: FR output is INT8 (scale≈1/128, zp=0). That part stays unchanged.
 
 #include <stdio.h>
 #include <string.h>
@@ -58,6 +70,9 @@ const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 #ifndef FR_INPUT_IS_U8
 #define FR_INPUT_IS_U8  FR_IN_IS_UINT8  /* 0 = I8 symmetric input; 1 = U8 zp=127 input */
 #endif
+#ifndef FR_INPUT_IS_BGR
+#define FR_INPUT_IS_BGR 0              /* 0=RGB (default), 1=BGR swap for FR only */
+#endif
 
 /* Quantization params for U8 input (match TFLite: scale=1/128, zp=127) */
 #ifndef FR_IN_INV_SCALE
@@ -67,19 +82,28 @@ const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 #define FR_IN_ZP         127.0f
 #endif
 
-/* Optional: simple brightness normalization for dim scenes (two-pass; off by default).
-   Set FR_ENABLE_BRIGHTEN=1 to enable. */
+/* Optional: per-channel brightness normalization for dim scenes (two-pass). */
 #ifndef FR_ENABLE_BRIGHTEN
-#define FR_ENABLE_BRIGHTEN       0
+#define FR_ENABLE_BRIGHTEN       1
 #endif
 #ifndef FR_BRIGHTEN_TARGET
-#define FR_BRIGHTEN_TARGET       0.50f   /* aim mid-gray in [0..1] */
+#define FR_BRIGHTEN_TARGET       0.50f   /* aim mid-gray in [0..1] (≈127 for U8) */
 #endif
 #ifndef FR_BRIGHTEN_GAIN_MIN
 #define FR_BRIGHTEN_GAIN_MIN     0.80f
 #endif
 #ifndef FR_BRIGHTEN_GAIN_MAX
-#define FR_BRIGHTEN_GAIN_MAX     1.50f
+#define FR_BRIGHTEN_GAIN_MAX     1.60f
+#endif
+
+#ifndef FR_ENABLE_GAMMA
+#define FR_ENABLE_GAMMA          1
+#endif
+#ifndef FR_GAMMA
+#define FR_GAMMA                 0.92f   /* <1 brightens mids */
+#endif
+#ifndef FR_GAMMA_THRESH
+#define FR_GAMMA_THRESH          0.45f
 #endif
 
 #ifndef FR_TOPK
@@ -92,6 +116,15 @@ const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 
 #ifndef FR_MATCH_THR
 #define FR_MATCH_THR    0.50f
+#endif
+#ifndef FR_THR_ON
+#define FR_THR_ON       FR_MATCH_THR
+#endif
+#ifndef FR_THR_OFF
+#define FR_THR_OFF      0.40f
+#endif
+#ifndef FR_LOCK_FORGET_FRAMES
+#define FR_LOCK_FORGET_FRAMES  15
 #endif
 
 #ifndef FR_PERIOD_MS
@@ -190,7 +223,7 @@ static inline float iou_norm_boxes(const od_pp_outBuffer_t *a, const od_pp_outBu
   float iw = fmaxf(0.f, ix1 - ix0), ih = fmaxf(0.f, iy1 - iy0);
   float inter = iw * ih;
   float aarea = fmaxf(0.f, ax1-ax0) * fmaxf(0.f, ay1-ay0);
-  float barea = fmaxf(0.f, bx1-bx0) * fmaxf(0.f, by1-by0);  /* FIX: was by1-by1 */
+  float barea = fmaxf(0.f, bx1-bx0) * fmaxf(0.f, by1-by0);
   float uni = aarea + barea - inter + 1e-6f;
   return inter / uni;
 }
@@ -250,7 +283,7 @@ static inline void bilinear_rgb_sample(
 /* Crop detector float32 frame (RGB, NHWC, [0..1]) using ROI
  * → FaceRec 160×160 quantized input (INT8 sym or U8 asym), with margin.
  * Matches TFLite U8 input quantization: scale=1/128, zp=127 when FR_INPUT_IS_U8=1.
- * Optional brightness normalization can be enabled with FR_ENABLE_BRIGHTEN (two-pass).
+ * Optional per-channel brightness normalization and gamma lift.
  */
 static void crop_to_facerec_input_quant_from_detector_f32(
     const float *src_nhwc,  int src_w, int src_h,
@@ -282,8 +315,11 @@ static void crop_to_facerec_input_quant_from_detector_f32(
   int taps = 0, clamped = 0;
   double acc_r = 0.0, acc_g = 0.0, acc_b = 0.0;
 
+  float gain_r = 1.0f, gain_g = 1.0f, gain_b = 1.0f;
+  float apply_gamma = 0.0f;
+
 #if FR_ENABLE_BRIGHTEN
-  /* ----- Pass 1: estimate mean brightness in the crop ----- */
+  /* ----- Pass 1: estimate per-channel brightness in the crop ----- */
   for (int y = 0; y < dst_h; ++y) {
     float sy = y0 + (y + 0.5f) * sy_scale;
     for (int x = 0; x < dst_w; ++x) {
@@ -300,33 +336,55 @@ static void crop_to_facerec_input_quant_from_detector_f32(
   float mean_b = (float)(acc_b / denom);
   float mean_rgb = (mean_r + mean_g + mean_b) * (1.0f/3.0f);
 
-  float gain = 1.0f;
-  if (mean_rgb > 1e-6f) {
-    gain = clampf(FR_BRIGHTEN_TARGET / mean_rgb, FR_BRIGHTEN_GAIN_MIN, FR_BRIGHTEN_GAIN_MAX);
-  }
+  /* Per-channel gains toward target */
+  if (mean_r > 1e-6f) gain_r = clampf(FR_BRIGHTEN_TARGET / mean_r, FR_BRIGHTEN_GAIN_MIN, FR_BRIGHTEN_GAIN_MAX);
+  if (mean_g > 1e-6f) gain_g = clampf(FR_BRIGHTEN_TARGET / mean_g, FR_BRIGHTEN_GAIN_MIN, FR_BRIGHTEN_GAIN_MAX);
+  if (mean_b > 1e-6f) gain_b = clampf(FR_BRIGHTEN_TARGET / mean_b, FR_BRIGHTEN_GAIN_MIN, FR_BRIGHTEN_GAIN_MAX);
+
+  /* Decide whether to lift mids with gamma */
+#if FR_ENABLE_GAMMA
+  if (mean_rgb < FR_GAMMA_THRESH) apply_gamma = FR_GAMMA;
+#endif
+
   /* reset accumulators if dbg requested (so they reflect post-gain means) */
   if (dbg) { acc_r = acc_g = acc_b = 0.0; taps = 0; clamped = 0; }
+#endif /* FR_ENABLE_BRIGHTEN */
 
-  /* ----- Pass 2: apply gain, map to [-1,1], then quantize ----- */
+  /* ----- Pass 2: apply gains/gamma (if enabled), map, quantize ----- */
   for (int y = 0; y < dst_h; ++y) {
     float sy = y0 + (y + 0.5f) * sy_scale;
     for (int x = 0; x < dst_w; ++x) {
       float sx = x0 + (x + 0.5f) * sx_scale;
       float r,g,b; int hit=0;
       bilinear_rgb_sample(src_nhwc, src_w, src_h, sx, sy, &r, &g, &b, &hit);
-      r = clampf(r*gain, 0.0f, 1.0f);
-      g = clampf(g*gain, 0.0f, 1.0f);
-      b = clampf(b*gain, 0.0f, 1.0f);
+
+#if FR_ENABLE_BRIGHTEN
+      r = clampf(r*gain_r, 0.0f, 1.0f);
+      g = clampf(g*gain_g, 0.0f, 1.0f);
+      b = clampf(b*gain_b, 0.0f, 1.0f);
+  #if FR_ENABLE_GAMMA
+      if (apply_gamma > 0.0f && apply_gamma != 1.0f) {
+        r = powf(r, apply_gamma);
+        g = powf(g, apply_gamma);
+        b = powf(b, apply_gamma);
+      }
+  #endif
+#endif
 
       if (dbg) { acc_r += r; acc_g += g; acc_b += b; taps++; if (hit) clamped++; }
 
+#if FR_INPUT_IS_BGR
+      /* swap channels for FR only if requested */
+      float tmp = r; r = b; b = tmp;
+#endif
+
       /* map [0..1] → [-1,1] */
       float rq = r * 2.0f - 1.0f;
       float gq = g * 2.0f - 1.0f;
       float bq = b * 2.0f - 1.0f;
 
       const int d = (y * dst_w + x) * 3;
-  #if FR_INPUT_IS_U8
+#if FR_INPUT_IS_U8
       int qr = (int)lrintf(rq * FR_IN_INV_SCALE + FR_IN_ZP);
       int qg = (int)lrintf(gq * FR_IN_INV_SCALE + FR_IN_ZP);
       int qb = (int)lrintf(bq * FR_IN_INV_SCALE + FR_IN_ZP);
@@ -336,7 +394,7 @@ static void crop_to_facerec_input_quant_from_detector_f32(
       ((uint8_t*)dst)[d+0] = (uint8_t)qr;
       ((uint8_t*)dst)[d+1] = (uint8_t)qg;
       ((uint8_t*)dst)[d+2] = (uint8_t)qb;
-  #else
+#else
       int qr = (int)lrintf(rq * 127.0f);
       int qg = (int)lrintf(gq * 127.0f);
       int qb = (int)lrintf(bq * 127.0f);
@@ -346,54 +404,9 @@ static void crop_to_facerec_input_quant_from_detector_f32(
       ((int8_t*)dst)[d+0] = (int8_t)qr;
       ((int8_t*)dst)[d+1] = (int8_t)qg;
       ((int8_t*)dst)[d+2] = (int8_t)qb;
-  #endif
+#endif
     }
   }
-
-#else  /* FR_ENABLE_BRIGHTEN == 0 : single-pass, no gain */
-
-  for (int y = 0; y < dst_h; ++y) {
-    float sy = y0 + (y + 0.5f) * sy_scale;
-    for (int x = 0; x < dst_w; ++x) {
-      float sx = x0 + (x + 0.5f) * sx_scale;
-      float r,g,b; int hit=0;
-      bilinear_rgb_sample(src_nhwc, src_w, src_h, sx, sy, &r, &g, &b, &hit);
-
-      acc_r += r; acc_g += g; acc_b += b;
-      taps++; if (hit) clamped++;
-
-      /* map [0..1] → [-1,1] */
-      float rq = r * 2.0f - 1.0f;
-      float gq = g * 2.0f - 1.0f;
-      float bq = b * 2.0f - 1.0f;
-
-      const int d = (y * dst_w + x) * 3;
-
-  #if FR_INPUT_IS_U8
-      int qr = (int)lrintf(rq * FR_IN_INV_SCALE + FR_IN_ZP);
-      int qg = (int)lrintf(gq * FR_IN_INV_SCALE + FR_IN_ZP);
-      int qb = (int)lrintf(bq * FR_IN_INV_SCALE + FR_IN_ZP);
-      if (qr < 0)   qr = 0;   else if (qr > 255) qr = 255;
-      if (qg < 0)   qg = 0;   else if (qg > 255) qg = 255;
-      if (qb < 0)   qb = 0;   else if (qb > 255) qb = 255;
-      ((uint8_t*)dst)[d+0] = (uint8_t)qr;
-      ((uint8_t*)dst)[d+1] = (uint8_t)qg;
-      ((uint8_t*)dst)[d+2] = (uint8_t)qb;
-  #else
-      int qr = (int)lrintf(rq * 127.0f);
-      int qg = (int)lrintf(gq * 127.0f);
-      int qb = (int)lrintf(bq * 127.0f);
-      if (qr < -128) qr = -128; else if (qr > 127) qr = 127;
-      if (qg < -128) qg = -128; else if (qg > 127) qg = 127;
-      if (qb < -128) qb = -128; else if (qb > 127) qb = 127;
-      ((int8_t*)dst)[d+0] = (int8_t)qr;
-      ((int8_t*)dst)[d+1] = (int8_t)qg;
-      ((int8_t*)dst)[d+2] = (int8_t)qb;
-  #endif
-    }
-  }
-
-#endif /* FR_ENABLE_BRIGHTEN */
 
   if (dbg) {
     dbg->x0 = x0; dbg->y0 = y0; dbg->x1 = x1; dbg->y1 = y1;
@@ -412,6 +425,14 @@ static float l2_norm(const float *x, int n)
   double s=0.0; for (int i=0;i<n;i++){ double v=x[i]; s+=v*v; }
   return (float)sqrt(s);
 }
+
+/* Hysteresis lock for identity */
+typedef struct {
+  char  name[32];
+  float score;
+  int   bad_frames;
+  int   locked;
+} id_lock_t;
 
 void pp_thread_fct(void *arg)
 {
@@ -474,10 +495,11 @@ void pp_thread_fct(void *arg)
            (void*)fr_out, (unsigned long)fr_out_len,
            (unsigned long)need_in_bytes, (unsigned)FR_EMB_SIZE);
   } else {
-    printf("[FR][IO] IN=%p (%lu) OUT=%p (%lu)  (expected in=%lu out=%u)  [mode=%s]\r\n",
+    printf("[FR][IO] IN=%p (%lu) OUT=%p (%lu)  (expected in=%lu out=%u)  [mode=%s]%s\r\n",
            (void*)fr_in, (unsigned long)fr_in_len,
            (void*)fr_out, (unsigned long)fr_out_len,
-           (unsigned long)need_in_bytes, (unsigned)FR_EMB_SIZE, mode_str);
+           (unsigned long)need_in_bytes, (unsigned)FR_EMB_SIZE, mode_str,
+           FR_INPUT_IS_BGR ? " [FR uses BGR]" : "");
   }
 
   /* Audit reference set once */
@@ -515,16 +537,20 @@ void pp_thread_fct(void *arg)
   const int       HOLD_MISS_FRAMES = FR_HOLD_MISS_FRAMES;
   const float     EMA_ALPHA        = FR_EMA_ALPHA;
 
-  /* FR throttling & threshold */
+  /* FR throttling & thresholds */
   uint32_t last_fr_ms = 0;
   const uint32_t FR_PERIOD = FR_PERIOD_MS;
-  const float    MATCH_THR = FR_MATCH_THR;
+  const float    THR_ON    = FR_THR_ON;
+  const float    THR_OFF   = FR_THR_OFF;
 
   /* Debug cadence */
   uint32_t last_dbg_ms = 0;
 
   /* Previous embedding for self-consistency */
   float prev_emb[FR_EMB_SIZE]; int have_prev = 0;
+
+  /* Identity lock */
+  static id_lock_t lock = {{0}, 0.0f, 0, 0};
 
   while (1)
   {
@@ -655,8 +681,7 @@ void pp_thread_fct(void *arg)
       /* Optional periodic debug on crop + input stats */
       if ((now - last_dbg_ms) >= DBG_EVERY_MS) {
 #if DBG_PRINT_ROI
-        printf("[FR][crop] px=[%.1f,%.1f]-[%.1f,%.1f] side=%.1f roiWH=%.1fx%.1f "
-               "clamped=%d/%d (%.1f%%) preQ_meanRGB=%.3f/%.3f/%.3f\r\n",
+        printf("[FR][crop] px=[%.1f,%.1f]-[%.1f,%.1f] side=%.1f roiWH=%.1fx%.1f clamped=%d/%d (%.1f%%) preQ_meanRGB=%.3f/%.3f/%.3f\r\n",
                cdbg.x0, cdbg.y0, cdbg.x1, cdbg.y1, cdbg.side,
                cdbg.roi_w, cdbg.roi_h,
                cdbg.taps_clamped, cdbg.taps,
@@ -679,10 +704,6 @@ void pp_thread_fct(void *arg)
         float mr=(float)(sumR/(double)(cnt/3)), mg=(float)(sumG/(double)(cnt/3)), mb=(float)(sumB/(double)(cnt/3));
         printf("[FR][in] U8 stats: min=%u max=%u mean=%.1f  perC=%.1f/%.1f/%.1f (expect ~127 center)\r\n",
                (unsigned)mn, (unsigned)mx, mean, mr, mg, mb);
-        if (mean < 80.f || mean > 175.f) {
-          printf("[FR][SUSPECT] Input looks NOT centered near 127. If your FR tflite expects U8, ok; "
-                 "if it expects I8, rebuild with -DFR_INPUT_IS_U8=0.\r\n");
-        }
 #else
         int8_t mn = 127, mx = -128; long sum = 0;
         double sumR=0, sumG=0, sumB=0;
@@ -696,10 +717,6 @@ void pp_thread_fct(void *arg)
         float mr=(float)(sumR/(double)(cnt/3)), mg=(float)(sumG/(double)(cnt/3)), mb=(float)(sumB/(double)(cnt/3));
         printf("[FR][in] I8 stats: min=%d max=%d mean=%.1f  perC=%.1f/%.1f/%.1f (expect ~0 center)\r\n",
                (int)mn, (int)mx, mean, mr, mg, mb);
-        if (mean < -40.f || mean > 40.f) {
-          printf("[FR][SUSPECT] Input looks far from 0. Your FR likely expects U8 (zp=127). "
-                 "Rebuild with: -DFR_INPUT_IS_U8=1\r\n");
-        }
 #endif /* FR_INPUT_IS_U8 */
 #endif /* DBG_PRINT_IN_STATS */
         last_dbg_ms = now;
@@ -741,34 +758,61 @@ void pp_thread_fct(void *arg)
       }
 #endif
 
-      /* Compare to reference set — keep Top-K for debug */
-      int   best_i = -1;
-      float best_s = -2.0f;
-
+      /* ----- Compare to reference set (Top-K and per-name Top3-mean) ----- */
       int   top_idx[8];   float top_val[8];
       const int K = (FR_TOPK <= 8 ? FR_TOPK : 8);
       for (int k=0;k<K;k++){ top_idx[k] = -1; top_val[k] = -2.0f; }
 
+      /* Compute best per-name using mean of top-3 refs for that name */
+      float best_name_score = -2.0f;
+      const char *best_name_ptr = NULL;
+
       for (int i = 0; i < g_ref_set_count; ++i) {
-        int dim = (probe_dim < g_ref_set[i].dim) ? probe_dim : g_ref_set[i].dim;
-        if (dim <= 0) continue;
-        float s = cosine_sim(probe_f, g_ref_set[i].data, dim);
+        const char *nm = g_ref_set[i].name ? g_ref_set[i].name : "";
+        if (!nm[0]) continue;
 
-        if (s > best_s) { best_s = s; best_i = i; }
+        /* collect top-3 scores for this name */
+        float t1=-2.f, t2=-2.f, t3=-2.f;
+        for (int j = 0; j < g_ref_set_count; ++j) {
+          if (!g_ref_set[j].name) continue;
+          if (strcmp(g_ref_set[j].name, nm) != 0) continue;
+          int dim = (probe_dim < g_ref_set[j].dim) ? probe_dim : g_ref_set[j].dim;
+          if (dim <= 0) continue;
+          float s = cosine_sim(probe_f, g_ref_set[j].data, dim);
 
-        /* insert into small Top-K */
-        for (int k=0;k<K;k++){
-          if (s > top_val[k]) {
-            for (int m=K-1; m>k; --m) { top_val[m]=top_val[m-1]; top_idx[m]=top_idx[m-1]; }
-            top_val[k] = s; top_idx[k] = i; break;
+          /* maintain global Top-K of individual refs for debug */
+          for (int k=0;k<K;k++){
+            if (s > top_val[k]) {
+              for (int m=K-1; m>k; --m) { top_val[m]=top_val[m-1]; top_idx[m]=top_idx[m-1]; }
+              top_val[k] = s; top_idx[k] = j; break;
+            }
           }
+
+          /* in-name top3 */
+          if (s > t1){ t3=t2; t2=t1; t1=s; }
+          else if (s > t2){ t3=t2; t2=s; }
+          else if (s > t3){ t3=s; }
+        }
+
+        float mean_top3;
+        if (t2 < -1.0f) {
+          /* fewer than 2 examples: use max only */
+          mean_top3 = t1;
+        } else if (t3 < -1.0f) {
+          mean_top3 = (t1 + t2) * 0.5f;
+        } else {
+          mean_top3 = (t1 + t2 + t3) / 3.0f;
+        }
+
+        if (mean_top3 > best_name_score) {
+          best_name_score = mean_top3;
+          best_name_ptr   = nm;
         }
       }
 
-      const char *name = "Unknown";
-      if (best_i >= 0 && g_ref_set[best_i].name && g_ref_set[best_i].name[0] && best_s >= MATCH_THR) {
-        name = g_ref_set[best_i].name;
-      }
+      /* Candidate (by per-name Top3-mean) */
+      const char *cand_name = (best_name_ptr && best_name_score > -1.0f) ? best_name_ptr : "Unknown";
+      float       cand_s    = (best_name_score > -2.0f) ? best_name_score : 0.0f;
 
       /* Self-consistency with previous embedding */
       if (have_prev) {
@@ -777,8 +821,53 @@ void pp_thread_fct(void *arg)
       }
       memcpy(prev_emb, probe_f, probe_dim*sizeof(float)); have_prev = 1;
 
+      /* ----- Hysteresis lock to avoid flicker ----- */
+      const char *final_name = "Unknown";
+      float final_s = cand_s;
+
+      if (!lock.locked) {
+        if (cand_s >= THR_ON && cand_name && cand_name[0]) {
+          snprintf(lock.name, sizeof(lock.name), "%s", cand_name);
+          lock.score = cand_s;
+          lock.bad_frames = 0;
+          lock.locked = 1;
+        }
+        final_name = lock.locked ? lock.name : "Unknown";
+        final_s    = lock.locked ? cand_s   : cand_s;
+      } else {
+        if (cand_name && strcmp(cand_name, lock.name) == 0) {
+          /* same identity candidate */
+          if (cand_s >= THR_OFF) {
+            lock.score = cand_s;
+            lock.bad_frames = 0;
+          } else {
+            lock.bad_frames++;
+            if (lock.bad_frames > FR_LOCK_FORGET_FRAMES) {
+              lock.locked = 0;
+              lock.name[0] = '\0';
+            }
+          }
+        } else {
+          /* different candidate */
+          if (cand_s >= THR_ON && cand_s > lock.score + 0.05f) {
+            snprintf(lock.name, sizeof(lock.name), "%s", cand_name);
+            lock.score = cand_s;
+            lock.bad_frames = 0;
+            lock.locked = 1;
+          } else {
+            lock.bad_frames++;
+            if (lock.bad_frames > FR_LOCK_FORGET_FRAMES) {
+              lock.locked = 0;
+              lock.name[0] = '\0';
+            }
+          }
+        }
+        final_name = lock.locked ? lock.name : ((cand_s >= THR_ON && cand_name)?cand_name:"Unknown");
+        final_s    = lock.locked ? lock.score: cand_s;
+      }
+
       /* Log result + Top-K */
-      printf("[FR] match: %s  cos=%.3f  (dt=%lums)\r\n", name, best_s, (unsigned long)dt);
+      printf("[FR] match: %s  cos=%.3f  (dt=%lums)\r\n", final_name, final_s, (unsigned long)dt);
 #if DBG_PRINT_TOPK
       if (K > 0) {
         printf("[FR][Top%d] ", K);
@@ -792,11 +881,11 @@ void pp_thread_fct(void *arg)
 #endif
 
       /* Update overlay */
-      snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "%s  %.2f", name, best_s);
+      snprintf((char*)g_fr_overlay_label, sizeof(g_fr_overlay_label), "%s  %.2f", final_name, final_s);
     }
 
     /* -------- publish detection only (overlay text is global) -------- */
-    BaseType_t lock = xSemaphoreTake(disp.lock, portMAX_DELAY);  assert(lock == pdTRUE);
+    BaseType_t lock_sem = xSemaphoreTake(disp.lock, portMAX_DELAY);  assert(lock_sem == pdTRUE);
 
     if (primary.have) {
       disp.info.nb_detect = 1;
@@ -812,7 +901,7 @@ void pp_thread_fct(void *arg)
 #endif
     disp.info.pp_ms = nn_pp[1] - nn_pp[0];
 
-    lock = xSemaphoreGive(disp.lock);  assert(lock == pdTRUE);
+    lock_sem = xSemaphoreGive(disp.lock);  assert(lock_sem == pdTRUE);
 
     bqueue_put_free(&nn_output_queue);
     xSemaphoreGive(disp.update);
