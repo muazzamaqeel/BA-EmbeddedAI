@@ -9,7 +9,7 @@
 //  - Tracks embedding self-consistency over time.
 //
 // Build-time knobs (override with -D):
-//   FR_INPUT_IS_U8=0/1  (0 = INT8 symmetric input; 1 = U8 zp=128 input)
+//   FR_INPUT_IS_U8=0/1  (0 = INT8 symmetric input; 1 = U8 zp=127 input)
 //   FR_TOPK=3
 //   FR_CROP_MARGIN=0.20f
 //   FR_MATCH_THR=0.50f
@@ -56,7 +56,30 @@ const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 /* ====== Build-time knobs (override via -D at compile) ====== */
 /* Default to the model-generated quant choice unless caller overrides. */
 #ifndef FR_INPUT_IS_U8
-#define FR_INPUT_IS_U8  FR_IN_IS_UINT8  /* 0 = I8 symmetric input; 1 = U8 zp=128 input */
+#define FR_INPUT_IS_U8  FR_IN_IS_UINT8  /* 0 = I8 symmetric input; 1 = U8 zp=127 input */
+#endif
+
+/* Quantization params for U8 input (match TFLite: scale=1/128, zp=127) */
+#ifndef FR_IN_INV_SCALE
+#define FR_IN_INV_SCALE  128.0f   /* 1 / 0.0078125f */
+#endif
+#ifndef FR_IN_ZP
+#define FR_IN_ZP         127.0f
+#endif
+
+/* Optional: simple brightness normalization for dim scenes (two-pass; off by default).
+   Set FR_ENABLE_BRIGHTEN=1 to enable. */
+#ifndef FR_ENABLE_BRIGHTEN
+#define FR_ENABLE_BRIGHTEN       0
+#endif
+#ifndef FR_BRIGHTEN_TARGET
+#define FR_BRIGHTEN_TARGET       0.50f   /* aim mid-gray in [0..1] */
+#endif
+#ifndef FR_BRIGHTEN_GAIN_MIN
+#define FR_BRIGHTEN_GAIN_MIN     0.80f
+#endif
+#ifndef FR_BRIGHTEN_GAIN_MAX
+#define FR_BRIGHTEN_GAIN_MAX     1.50f
 #endif
 
 #ifndef FR_TOPK
@@ -139,6 +162,7 @@ extern const int    g_ref_set_count;
 /* ---------------- helpers ---------------- */
 
 static inline int clampi(int v, int lo, int hi){ return (v<lo)?lo:((v>hi)?hi:v); }
+static inline float clampf(float v, float lo, float hi){ return (v<lo)?lo:((v>hi)?hi:v); }
 
 static float cosine_sim(const float *a, const float *b, int n)
 {
@@ -166,7 +190,7 @@ static inline float iou_norm_boxes(const od_pp_outBuffer_t *a, const od_pp_outBu
   float iw = fmaxf(0.f, ix1 - ix0), ih = fmaxf(0.f, iy1 - iy0);
   float inter = iw * ih;
   float aarea = fmaxf(0.f, ax1-ax0) * fmaxf(0.f, ay1-ay0);
-  float barea = fmaxf(0.f, bx1-bx0) * fmaxf(0.f, by1-by1);  /* typo fixed? keep original if needed */
+  float barea = fmaxf(0.f, bx1-bx0) * fmaxf(0.f, by1-by0);  /* FIX: was by1-by1 */
   float uni = aarea + barea - inter + 1e-6f;
   return inter / uni;
 }
@@ -179,8 +203,54 @@ typedef struct {
   float mean_r, mean_g, mean_b; /* pre-quant means in [0..1] */
 } CropDbg;
 
+/* ---- Bilinear sampler (RGB from NHWC [0..1]) ---- */
+static inline void bilinear_rgb_sample(
+    const float *src_nhwc, int src_w, int src_h,
+    float fx, float fy,
+    float *r, float *g, float *b,
+    int *hit_border)
+{
+  int sx0 = (int)floorf(fx);
+  int sy0 = (int)floorf(fy);
+  int sx1 = sx0 + 1;
+  int sy1 = sy0 + 1;
+
+  int csx0 = sx0, csx1 = sx1, csy0 = sy0, csy1 = sy1;
+  if (csx0 < 0) csx0 = 0; else if (csx0 >= src_w) csx0 = src_w - 1;
+  if (csx1 < 0) csx1 = 0; else if (csx1 >= src_w) csx1 = src_w - 1;
+  if (csy0 < 0) csy0 = 0; else if (csy0 >= src_h) csy0 = src_h - 1;
+  if (csy1 < 0) csy1 = 0; else if (csy1 >= src_h) csy1 = src_h - 1;
+
+  float wx = fx - (float)sx0;
+  float wy = fy - (float)sy0;
+
+  const int idx00 = (csy0 * src_w + csx0) * 3;
+  const int idx01 = (csy0 * src_w + csx1) * 3;
+  const int idx10 = (csy1 * src_w + csx0) * 3;
+  const int idx11 = (csy1 * src_w + csx1) * 3;
+
+  const float w00 = (1.0f - wx) * (1.0f - wy);
+  const float w01 = (       wx) * (1.0f - wy);
+  const float w10 = (1.0f - wx) * (       wy);
+  const float w11 = (       wx) * (       wy);
+
+  *r = src_nhwc[idx00+0]*w00 + src_nhwc[idx01+0]*w01 +
+       src_nhwc[idx10+0]*w10 + src_nhwc[idx11+0]*w11;
+  *g = src_nhwc[idx00+1]*w00 + src_nhwc[idx01+1]*w01 +
+       src_nhwc[idx10+1]*w10 + src_nhwc[idx11+1]*w11;
+  *b = src_nhwc[idx00+2]*w00 + src_nhwc[idx01+2]*w01 +
+       src_nhwc[idx10+2]*w10 + src_nhwc[idx11+2]*w11;
+
+  if (hit_border) {
+    int clamped = (csx0 != sx0) || (csx1 != sx1) || (csy0 != sy0) || (csy1 != sy1);
+    *hit_border = clamped;
+  }
+}
+
 /* Crop detector float32 frame (RGB, NHWC, [0..1]) using ROI
  * → FaceRec 160×160 quantized input (INT8 sym or U8 asym), with margin.
+ * Matches TFLite U8 input quantization: scale=1/128, zp=127 when FR_INPUT_IS_U8=1.
+ * Optional brightness normalization can be enabled with FR_ENABLE_BRIGHTEN (two-pass).
  */
 static void crop_to_facerec_input_quant_from_detector_f32(
     const float *src_nhwc,  int src_w, int src_h,
@@ -209,65 +279,88 @@ static void crop_to_facerec_input_quant_from_detector_f32(
   const float sx_scale = (x1 - x0) / (float)dst_w;
   const float sy_scale = (y1 - y0) / (float)dst_h;
 
-#if FR_INPUT_IS_U8
-  /* U8 asymmetric: [-1,1] → round(x*(255/2) + 128) = round(x*127.5 + 128) */
-  const float q_mul = 127.5f;
-  const float q_zp  = 128.0f;
-#else
-  /* INT8 symmetric: [-1,1] → round(x*127) (clamp to [-128,127]) */
-  const float q_mul = 127.0f;
-#endif
-
-#if !FR_INPUT_IS_U8
-  int8_t *dst_i8 = dst;
-#else
-  uint8_t *dst_u8 = dst;
-#endif
-
   int taps = 0, clamped = 0;
   double acc_r = 0.0, acc_g = 0.0, acc_b = 0.0;
 
+#if FR_ENABLE_BRIGHTEN
+  /* ----- Pass 1: estimate mean brightness in the crop ----- */
   for (int y = 0; y < dst_h; ++y) {
     float sy = y0 + (y + 0.5f) * sy_scale;
-    int sy0 = (int)floorf(sy);
-    int sy1 = sy0 + 1;
-    float wy = sy - (float)sy0;
-    int csy0 = sy0, csy1 = sy1;
-    if (csy0 < 0) csy0 = 0; else if (csy0 >= src_h) csy0 = src_h - 1;
-    if (csy1 < 0) csy1 = 0; else if (csy1 >= src_h) csy1 = src_h - 1;
-    int y_clamp = (csy0 != sy0) || (csy1 != sy1);
-
     for (int x = 0; x < dst_w; ++x) {
       float sx = x0 + (x + 0.5f) * sx_scale;
-      int sx0 = (int)floorf(sx);
-      int sx1 = sx0 + 1;
-      float wx = sx - (float)sx0;
+      float r,g,b; int hit=0;
+      bilinear_rgb_sample(src_nhwc, src_w, src_h, sx, sy, &r, &g, &b, &hit);
+      acc_r += r; acc_g += g; acc_b += b;
+      taps++; if (hit) clamped++;
+    }
+  }
+  double denom = (double)(dst_w * dst_h);
+  float mean_r = (float)(acc_r / denom);
+  float mean_g = (float)(acc_g / denom);
+  float mean_b = (float)(acc_b / denom);
+  float mean_rgb = (mean_r + mean_g + mean_b) * (1.0f/3.0f);
 
-      int csx0 = sx0, csx1 = sx1;
-      if (csx0 < 0) csx0 = 0; else if (csx0 >= src_w) csx0 = src_w - 1;
-      if (csx1 < 0) csx1 = 0; else if (csx1 >= src_w) csx1 = src_w - 1;
-      int x_clamp = (csx0 != sx0) || (csx1 != sx1);
+  float gain = 1.0f;
+  if (mean_rgb > 1e-6f) {
+    gain = clampf(FR_BRIGHTEN_TARGET / mean_rgb, FR_BRIGHTEN_GAIN_MIN, FR_BRIGHTEN_GAIN_MAX);
+  }
+  /* reset accumulators if dbg requested (so they reflect post-gain means) */
+  if (dbg) { acc_r = acc_g = acc_b = 0.0; taps = 0; clamped = 0; }
 
-      const int idx00 = (csy0 * src_w + csx0) * 3;
-      const int idx01 = (csy0 * src_w + csx1) * 3;
-      const int idx10 = (csy1 * src_w + csx0) * 3;
-      const int idx11 = (csy1 * src_w + csx1) * 3;
+  /* ----- Pass 2: apply gain, map to [-1,1], then quantize ----- */
+  for (int y = 0; y < dst_h; ++y) {
+    float sy = y0 + (y + 0.5f) * sy_scale;
+    for (int x = 0; x < dst_w; ++x) {
+      float sx = x0 + (x + 0.5f) * sx_scale;
+      float r,g,b; int hit=0;
+      bilinear_rgb_sample(src_nhwc, src_w, src_h, sx, sy, &r, &g, &b, &hit);
+      r = clampf(r*gain, 0.0f, 1.0f);
+      g = clampf(g*gain, 0.0f, 1.0f);
+      b = clampf(b*gain, 0.0f, 1.0f);
 
-      const float w00 = (1.0f - wx) * (1.0f - wy);
-      const float w01 = (       wx) * (1.0f - wy);
-      const float w10 = (1.0f - wx) * (       wy);
-      const float w11 = (       wx) * (       wy);
+      if (dbg) { acc_r += r; acc_g += g; acc_b += b; taps++; if (hit) clamped++; }
 
-      /* bilinear in RGB, input is [0..1] */
-      float r = src_nhwc[idx00+0]*w00 + src_nhwc[idx01+0]*w01 +
-                src_nhwc[idx10+0]*w10 + src_nhwc[idx11+0]*w11;
-      float g = src_nhwc[idx00+1]*w00 + src_nhwc[idx01+1]*w01 +
-                src_nhwc[idx10+1]*w10 + src_nhwc[idx11+1]*w11;
-      float b = src_nhwc[idx00+2]*w00 + src_nhwc[idx01+2]*w01 +
-                src_nhwc[idx10+2]*w10 + src_nhwc[idx11+2]*w11;
+      /* map [0..1] → [-1,1] */
+      float rq = r * 2.0f - 1.0f;
+      float gq = g * 2.0f - 1.0f;
+      float bq = b * 2.0f - 1.0f;
+
+      const int d = (y * dst_w + x) * 3;
+  #if FR_INPUT_IS_U8
+      int qr = (int)lrintf(rq * FR_IN_INV_SCALE + FR_IN_ZP);
+      int qg = (int)lrintf(gq * FR_IN_INV_SCALE + FR_IN_ZP);
+      int qb = (int)lrintf(bq * FR_IN_INV_SCALE + FR_IN_ZP);
+      if (qr < 0)   qr = 0;   else if (qr > 255) qr = 255;
+      if (qg < 0)   qg = 0;   else if (qg > 255) qg = 255;
+      if (qb < 0)   qb = 0;   else if (qb > 255) qb = 255;
+      ((uint8_t*)dst)[d+0] = (uint8_t)qr;
+      ((uint8_t*)dst)[d+1] = (uint8_t)qg;
+      ((uint8_t*)dst)[d+2] = (uint8_t)qb;
+  #else
+      int qr = (int)lrintf(rq * 127.0f);
+      int qg = (int)lrintf(gq * 127.0f);
+      int qb = (int)lrintf(bq * 127.0f);
+      if (qr < -128) qr = -128; else if (qr > 127) qr = 127;
+      if (qg < -128) qg = -128; else if (qg > 127) qg = 127;
+      if (qb < -128) qb = -128; else if (qb > 127) qb = 127;
+      ((int8_t*)dst)[d+0] = (int8_t)qr;
+      ((int8_t*)dst)[d+1] = (int8_t)qg;
+      ((int8_t*)dst)[d+2] = (int8_t)qb;
+  #endif
+    }
+  }
+
+#else  /* FR_ENABLE_BRIGHTEN == 0 : single-pass, no gain */
+
+  for (int y = 0; y < dst_h; ++y) {
+    float sy = y0 + (y + 0.5f) * sy_scale;
+    for (int x = 0; x < dst_w; ++x) {
+      float sx = x0 + (x + 0.5f) * sx_scale;
+      float r,g,b; int hit=0;
+      bilinear_rgb_sample(src_nhwc, src_w, src_h, sx, sy, &r, &g, &b, &hit);
 
       acc_r += r; acc_g += g; acc_b += b;
-      taps++; if (x_clamp || y_clamp) clamped++;
+      taps++; if (hit) clamped++;
 
       /* map [0..1] → [-1,1] */
       float rq = r * 2.0f - 1.0f;
@@ -276,38 +369,40 @@ static void crop_to_facerec_input_quant_from_detector_f32(
 
       const int d = (y * dst_w + x) * 3;
 
-#if FR_INPUT_IS_U8
-      int qr = (int)lrintf(rq * q_mul + q_zp);
-      int qg = (int)lrintf(gq * q_mul + q_zp);
-      int qb = (int)lrintf(bq * q_mul + q_zp);
+  #if FR_INPUT_IS_U8
+      int qr = (int)lrintf(rq * FR_IN_INV_SCALE + FR_IN_ZP);
+      int qg = (int)lrintf(gq * FR_IN_INV_SCALE + FR_IN_ZP);
+      int qb = (int)lrintf(bq * FR_IN_INV_SCALE + FR_IN_ZP);
       if (qr < 0)   qr = 0;   else if (qr > 255) qr = 255;
       if (qg < 0)   qg = 0;   else if (qg > 255) qg = 255;
       if (qb < 0)   qb = 0;   else if (qb > 255) qb = 255;
-      dst_u8[d+0] = (uint8_t)qr;
-      dst_u8[d+1] = (uint8_t)qg;
-      dst_u8[d+2] = (uint8_t)qb;
-#else
-      int qr = (int)lrintf(rq * q_mul);
-      int qg = (int)lrintf(gq * q_mul);
-      int qb = (int)lrintf(bq * q_mul);
+      ((uint8_t*)dst)[d+0] = (uint8_t)qr;
+      ((uint8_t*)dst)[d+1] = (uint8_t)qg;
+      ((uint8_t*)dst)[d+2] = (uint8_t)qb;
+  #else
+      int qr = (int)lrintf(rq * 127.0f);
+      int qg = (int)lrintf(gq * 127.0f);
+      int qb = (int)lrintf(bq * 127.0f);
       if (qr < -128) qr = -128; else if (qr > 127) qr = 127;
       if (qg < -128) qg = -128; else if (qg > 127) qg = 127;
       if (qb < -128) qb = -128; else if (qb > 127) qb = 127;
-      dst_i8[d+0] = (int8_t)qr;
-      dst_i8[d+1] = (int8_t)qg;
-      dst_i8[d+2] = (int8_t)qb;
-#endif
+      ((int8_t*)dst)[d+0] = (int8_t)qr;
+      ((int8_t*)dst)[d+1] = (int8_t)qg;
+      ((int8_t*)dst)[d+2] = (int8_t)qb;
+  #endif
     }
   }
+
+#endif /* FR_ENABLE_BRIGHTEN */
 
   if (dbg) {
     dbg->x0 = x0; dbg->y0 = y0; dbg->x1 = x1; dbg->y1 = y1;
     dbg->side = side; dbg->roi_w = bw; dbg->roi_h = bh;
     dbg->taps = taps; dbg->taps_clamped = clamped;
-    double denom = (double)(dst_w * dst_h);
-    dbg->mean_r = (float)(acc_r / denom);
-    dbg->mean_g = (float)(acc_g / denom);
-    dbg->mean_b = (float)(acc_b / denom);
+    double denom2 = (double)(dst_w * dst_h);
+    dbg->mean_r = (float)(acc_r / denom2);
+    dbg->mean_g = (float)(acc_g / denom2);
+    dbg->mean_b = (float)(acc_b / denom2);
   }
 }
 
@@ -362,7 +457,7 @@ void pp_thread_fct(void *arg)
 
 #if FR_INPUT_IS_U8
   uint8_t *fr_in = (uint8_t *)LL_Buffer_addr_start(&fr_in_info[0]);    /* U8 input */
-  const char *mode_str = "U8(zp=128)";
+  const char *mode_str = "U8(zp=127)";
 #else
   int8_t  *fr_in = (int8_t  *)LL_Buffer_addr_start(&fr_in_info[0]);    /* I8 input */
   const char *mode_str = "I8(zp=0)";
@@ -582,10 +677,10 @@ void pp_thread_fct(void *arg)
         }
         float mean = (float)sum / (float)cnt;
         float mr=(float)(sumR/(double)(cnt/3)), mg=(float)(sumG/(double)(cnt/3)), mb=(float)(sumB/(double)(cnt/3));
-        printf("[FR][in] U8 stats: min=%u max=%u mean=%.1f  perC=%.1f/%.1f/%.1f (expect ~128 center)\r\n",
+        printf("[FR][in] U8 stats: min=%u max=%u mean=%.1f  perC=%.1f/%.1f/%.1f (expect ~127 center)\r\n",
                (unsigned)mn, (unsigned)mx, mean, mr, mg, mb);
         if (mean < 80.f || mean > 175.f) {
-          printf("[FR][SUSPECT] Input looks NOT centered at 128. If your FR tflite expects U8, ok; "
+          printf("[FR][SUSPECT] Input looks NOT centered near 127. If your FR tflite expects U8, ok; "
                  "if it expects I8, rebuild with -DFR_INPUT_IS_U8=0.\r\n");
         }
 #else
@@ -602,7 +697,7 @@ void pp_thread_fct(void *arg)
         printf("[FR][in] I8 stats: min=%d max=%d mean=%.1f  perC=%.1f/%.1f/%.1f (expect ~0 center)\r\n",
                (int)mn, (int)mx, mean, mr, mg, mb);
         if (mean < -40.f || mean > 40.f) {
-          printf("[FR][SUSPECT] Input looks far from 0. Your FR likely expects U8 (zp=128). "
+          printf("[FR][SUSPECT] Input looks far from 0. Your FR likely expects U8 (zp=127). "
                  "Rebuild with: -DFR_INPUT_IS_U8=1\r\n");
         }
 #endif /* FR_INPUT_IS_U8 */

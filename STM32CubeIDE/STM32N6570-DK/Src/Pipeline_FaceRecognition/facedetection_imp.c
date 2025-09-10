@@ -21,6 +21,34 @@
 #define CMW_MODE_CONTINUOUS DCMIPP_MODE_CONTINUOUS
 #endif
 
+/* ===== Global detector-brightening knobs (compile-time) =====
+   -DET_BRIGHTEN_GAIN=<float>   e.g. 1.2f  (default 1.0f)
+   -DET_BRIGHTEN_BIAS=<float>   e.g. 0.05f (default 0.0f)
+   -DET_BRIGHTEN_GAMMA=<float>  e.g. 1.0f..2.2f (default 1.0f; 1.0 = no gamma)
+*/
+#ifndef DET_BRIGHTEN_GAIN
+#define DET_BRIGHTEN_GAIN   1.0f
+#endif
+#ifndef DET_BRIGHTEN_BIAS
+#define DET_BRIGHTEN_BIAS   0.0f
+#endif
+#ifndef DET_BRIGHTEN_GAMMA
+#define DET_BRIGHTEN_GAMMA  1.0f
+#endif
+
+static inline float det_brighten_apply(float v01)
+{
+  /* Apply gain & bias in [0..1], then optional gamma, clamp at each step */
+  float v = v01 * DET_BRIGHTEN_GAIN + DET_BRIGHTEN_BIAS;
+  if (v < 0.f) v = 0.f; else if (v > 1.f) v = 1.f;
+  if (DET_BRIGHTEN_GAMMA != 1.0f) {
+    /* powf is safe on [0..1]; gamma > 1 darkens mids, < 1 brightens mids */
+    v = powf(v, DET_BRIGHTEN_GAMMA);
+    if (v < 0.f) v = 0.f; else if (v > 1.f) v = 1.f;
+  }
+  return v;
+}
+
 /* ============================== */
 /* nn_thread_fct — INTERNAL-IO    */
 /* - camera RGB/BGR888 -> f32     */
@@ -96,7 +124,10 @@ void nn_thread_fct(void *arg)
     #if INPUT_IS_BGR
         float t = r; r = b; b = t;
     #endif
-        r = r * scale + bias; g = g * scale + bias; b = b * scale + bias;
+        /* Normalize to [0..1] then apply detector-brightening */
+        r = det_brighten_apply(r * scale + bias);
+        g = det_brighten_apply(g * scale + bias);
+        b = det_brighten_apply(b * scale + bias);
         dstR[i] = r; dstG[i] = g; dstB[i] = b;
 
     #if NN_LOG_INPUT_STATS
@@ -115,7 +146,10 @@ void nn_thread_fct(void *arg)
     #if INPUT_IS_BGR
         float t = r; r = b; b = t;
     #endif
-        r = r * scale + bias; g = g * scale + bias; b = b * scale + bias;
+        /* Normalize to [0..1] then apply detector-brightening */
+        r = det_brighten_apply(r * scale + bias);
+        g = det_brighten_apply(g * scale + bias);
+        b = det_brighten_apply(b * scale + bias);
         *dst++ = r; *dst++ = g; *dst++ = b;
 
     #if NN_LOG_INPUT_STATS
