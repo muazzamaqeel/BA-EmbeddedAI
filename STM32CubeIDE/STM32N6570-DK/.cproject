@@ -85,6 +85,7 @@
 								<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.mcmse.1359934775" name="Secure mode (-mcmse)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.mcmse" useByScannerDiscovery="false" value="true" valueType="boolean"/>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.definedsymbols.2005020979" name="Define symbols (-D)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.definedsymbols" useByScannerDiscovery="false" valueType="definedSymbols">
 									<listOptionValue builtIn="false" value="STM32N657xx"/>
+									<listOptionValue builtIn="false" value="FR_INPUT_IS_U8=1"/>
 									<listOptionValue builtIn="false" value="USE_FULL_ASSERT"/>
 									<listOptionValue builtIn="false" value="USE_FULL_LL_DRIVER"/>
 									<listOptionValue builtIn="false" value="VECT_TAB_SRAM"/>
@@ -104,6 +105,7 @@
 									<listOptionValue builtIn="false" value="TRACKER_MODULE"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.includepaths.1227356004" name="Include paths (-I)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.includepaths" useByScannerDiscovery="false" valueType="includePath">
+									<listOptionValue builtIn="false" value="&quot;C:\STM32_FaceRecognition\BA-EmbeddedAI\Model\FaceRecFiles\st_ai_output\header&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;C:\Users\Muazzam\Downloads\x-cube-n6-ai-people-detection-tracking-main\FD\x-cube-n6-ai-people-detection-tracking-main\Model\st_ai_output_blazeface&quot;"/>
 									<listOptionValue builtIn="false" value="../../../Inc"/>
 									<listOptionValue builtIn="false" value="../../../STM32Cube_FW_N6/Drivers/STM32N6xx_HAL_Driver/Inc"/>
@@ -130,6 +132,7 @@
 									<listOptionValue builtIn="false" value="../../../Lib/FreeRTOS/Source/portable/GCC/ARM_CM55_NTZ/non_secure"/>
 									<listOptionValue builtIn="false" value="../../../Lib/screenl/Inc"/>
 									<listOptionValue builtIn="false" value="../../../Lib/tracker"/>
+									<listOptionValue builtIn="false" value="../../../Model/FaceRec/facerec_out"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.otherflags.315856049" name="Other flags" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.otherflags" useByScannerDiscovery="true" valueType="stringList">
 									<listOptionValue builtIn="false" value=""/>
@@ -146,7 +149,7 @@
 									<listOptionValue builtIn="false" value="c"/>
 									<listOptionValue builtIn="false" value="m"/>
 									<listOptionValue builtIn="false" value="nosys"/>
-									<listOptionValue builtIn="false" value=":NetworkRuntime1010_CM55_GCC.a"/>
+									<listOptionValue builtIn="false" value=":NetworkRuntime1020_CM55_GCC.a"/>
 									<listOptionValue builtIn="false" value="n6-evision-awb_gcc"/>
 									<listOptionValue builtIn="false" value="n6-evision-st-ae_gcc"/>
 								</option>
@@ -178,7 +181,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="Lib/ai-postprocessing-wrapper/app_postprocess_od_st_yolox_uf.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+						<entry excluding="Src/Pipeline_FaceRecognition/UserFace/Automation|Lib/AI_Runtime/Npu/ll_aton/ll_aton_osal_rtos_template.c|Lib/ai-postprocessing-wrapper/app_postprocess_od_st_yolox_uf.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>

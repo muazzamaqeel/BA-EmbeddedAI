@@ -5,7 +5,7 @@
 
 /* define a concrete value for CUSTOM */
 #ifndef POSTPROCESS_CUSTOM
-#define POSTPROCESS_CUSTOM  999
+#define POSTPROCESS_CUSTOM 100
 #endif
 
 #ifdef STM32N6570_DK_REV
