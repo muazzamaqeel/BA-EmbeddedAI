@@ -5,14 +5,14 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-#include "app_config.h"      // LCD_BG_WIDTH/HEIGHT
+#include "app_config.h"
 #include "scrl.h"
 #include "stm32_lcd.h"
 #include "stm32_lcd_ex.h"
 
 #ifdef STM32N6570_DK_REV
   #include "stm32n6570_discovery.h"
-  // Enable touch path at build time (or define in app_config.h)
+  // Enable touch path at build time
   #ifndef HAS_TS
   #define HAS_TS 1
   #endif
