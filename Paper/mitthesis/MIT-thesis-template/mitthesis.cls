@@ -804,7 +804,7 @@
 		\mbox {\ and}\linebreak
 		\mbox {the\ \__degree_currdept: }
 	}
-    \linebreak \mbox {in\ partial\ fulfillment\ of\ the\ requirements\ for\ the\ 
+    \linebreak \mbox {in\ fulfillment\ of\ the\ requirements\ for\ the\ 
 		\int_compare:nNnTF { \g_degree_degreecnt_int } > {1} {degrees} {degree}
 	\ of}
 	\par
@@ -894,14 +894,14 @@
     	}
     	\int_do_while:nNnn { \g__signature_supno_int } < { \g_supervisor_supervisorcnt_int } {
     		\int_gincr:N  \g__signature_supno_int
-    		Certified\ by: & \seq_item:cn { g_supervisor_name_seq } { \g__signature_supno_int } \\
+    		First\ Supervisor: & \seq_item:cn { g_supervisor_name_seq } { \g__signature_supno_int } \\
     		& \seq_item:cn { g_supervisor_title_seq } { \g__signature_supno_int },\ 
     			\g_titlepage_supervisor_designation_tl \\[1em]
     	}
     	\int_compare:nNnF { \g_acceptor_acceptorcnt_int } = {0} {
         	\int_do_while:nNnn { \g__signature_accno_int } < { \g_acceptor_acceptorcnt_int } {
         		\int_gincr:N  \g__signature_accno_int
-        		Accepted\ by: & \seq_item:cn { g_acceptor_name_seq } { \g__signature_accno_int } \\
+        		Second\ Supervisor: & \seq_item:cn { g_acceptor_name_seq } { \g__signature_accno_int } \\
         		& \seq_item:cn { g_acceptor_department_seq } { \g__signature_accno_int }
         			\bool_if:NF \g__acceptor_title_tf_bool
         			{
@@ -948,8 +948,8 @@
 \tl_new:N \g__copyright_crwords_tl
 \tl_new:N \g__copyright_mitpermissionlast_tl
 
-\tl_new:N \g_copyright_mitpermission_tl
-\tl_gset:Nn \g__copyright_mitpermissionlast_tl {to\ MIT\ a\ nonexclusive,\ worldwide,\ irrevocable,\ royalty-free\ license\ to\ exercise\ any\ and\ all\ rights\ under\ copyright,\ including\ to\ reproduce,\ preserve,\ distribute\ and\ publicly\ display\ copies\ of\ the\ thesis,\ or\ release\ the\  thesis\ under\ an\ open-access\ license.}
+%\tl_new:N \g_copyright_mitpermission_tl
+%\tl_gset:Nn \g__copyright_mitpermissionlast_tl {to\ MIT\ a\ nonexclusive,\ worldwide,\ irrevocable,\ royalty-free\ license\ to\ exercise\ any\ and\ all\ rights\ under\ copyright,\ including\ to\ reproduce,\ preserve,\ distribute\ and\ publicly\ display\ copies\ of\ the\ thesis,\ or\ release\ the\  thesis\ under\ an\ open-access\ license.}
 
 \bool_new:N \g__cclicense_tf_bool
 \bool_gset_false:N \g__cclicense_tf_bool
@@ -1039,76 +1039,75 @@
 
 \RenewDocumentCommand\maketitle{s}{
 	\cs_if_exist:NTF \DegreeMonth { \scan_stop: } { \msg_error:nn { \ClassName } { no_degree_date } }% msg def'd in degree-date section
-%	
+	%	
 	\bool_if:NTF \g__cclicense_tf_bool { 
 		\tl_gset:Nn \g_copyright_copyrightlicencse_tl 
-			{This\ work\ is\ licensed\ under\ a\ \mbox{\g_copyright_cclicensetext_tl}\ license.\par\g_copyright_mitpermission_tl}
+		{This\ work\ is\ licensed\ under\ a\ \mbox{\g_copyright_cclicensetext_tl}\ license.\par\g_copyright_mitpermission_tl}
 		\tl_gset:Nn \g_copyright_pdfrightstext_tl 	 
-			{This\ work\ is\ licensed\ under\ a\ \g_copyright_ccname_tl\ license.\space \g_copyright_mitpermission_tl}
+		{This\ work\ is\ licensed\ under\ a\ \g_copyright_ccname_tl\ license.\space \g_copyright_mitpermission_tl}
+	}
+	\int_compare:nNnTF { \g_author_authorcnt_int} > {1} 
+	{   
+		\tl_gset:Nn \g__copyright_crwords_tl_ {} 
+	}
+	{
+		\tl_gset:Nn \g__copyright_crwords_tl_ {} 
+	}
+	\IfBooleanTF{#1}{
+		\tl_gset:Nn \g_copyright_mitpermission_tl {\scan_stop:}
 	}{
-		\tl_gset:Nn \g_copyright_copyrightlicencse_tl 
-			{All\ rights\ reserved. \par\g_copyright_mitpermission_tl}
-		\tl_gset:Nn \g_copyright_pdfrightstext_tl 	 
-			{All\ rights\ reserved.\space \g_copyright_mitpermission_tl}
-   }
-   \int_compare:nNnTF { \g_author_authorcnt_int} > {1} 
-   		{   
-			\tl_gset:Nn \g__copyright_crwords_tl_ {The\ authors\ hereby\ grant} 
-		}
-		{
-			\tl_gset:Nn \g__copyright_crwords_tl_ {The\ author\ hereby\ grants} 
-		}
-    \IfBooleanTF{#1}{
-	    \tl_gset:Nn \g_copyright_mitpermission_tl {\scan_stop:}
-    }{
-	    \tl_gset:Nn \g_copyright_mitpermission_tl { \g__copyright_crwords_tl_\ \g__copyright_mitpermissionlast_tl}
-    }
-% 
+		\tl_gset:Nn \g_copyright_mitpermission_tl { \g__copyright_crwords_tl_\ \g__copyright_mitpermissionlast_tl}
+	}
+	% 
 	\clearpage
 	\thispagestyle{empty}
 	\tag_struct_begin:n {tag=Sect, title=Titlepage}
 	\vbox_to_ht:nn { \vsize }% to prevent signature block from breaking across page
-		{
-			{ \centering
-                \setlength{\parskip}{7.5pt plus 1pt minus 1pt}% edited all vertical space on this page 2023/10/25
-                \setlength{\parindent}{0pt}\pdfbookmark[0]{Title\ page}{titlepage}
-                {
-                	\tag_struct_begin:n{tag=Title, title=Title}
-                    \Large\textbf{\g_mitthesis_title_tl}
-                    \par
-                    \tag_struct_end:
-                }
-    			\__titlepage_blockskip:nn {12}{1.5}
-				\tag_struct_begin:n {tag=Div, title=Author}
-                \__author_block:
-    			\tag_struct_end:
-				\__titlepage_blockskip:nn {12}{1.5}
-                \tag_struct_begin:n {tag=Div, title=Degree} 
-                \__degree_block:
-                at~the\par
-                \textls[60]{ \text_uppercase:n { \g_titlepage_institution_name_tl } }\par
-                \DegreeMonth\ \DegreeYear\par
-                \tag_struct_end:
-    			\__titlepage_blockskip:nn {12}{2}
-				\tag_struct_begin:n {tag=Div, title=Copyright}
-                \copyright\space\DegreeYear\space\CopyrightAuthor\@.\c_space_token \g_copyright_copyrightlicencse_tl % \@. in case name ends with III, IV, V,...
-				\par % required to center \g_copyrightlicense_tl text.
+	{
+		{ \centering
+			\setlength{\parskip}{7.5pt plus 1pt minus 1pt}% edited all vertical space on this page 2023/10/25
+			\setlength{\parindent}{0pt}\pdfbookmark[0]{Title\ page}{titlepage}
+			{
+				\tag_struct_begin:n{tag=Title, title=Title}
+				\Large\textbf{\g_mitthesis_title_tl}
+				\par
 				\tag_struct_end:
 			}
-			\__titlepage_blockskip:nn {18}{2}
-            \tag_struct_begin:n{tag=Div, title=Signatures}
-            \__signature_block:
+			\__titlepage_blockskip:nn {12}{1.5}
+			\tag_struct_begin:n {tag=Div, title=Author}
+			\__author_block:
 			\tag_struct_end:
-			\__titlepage_bottomskip:
+			\__titlepage_blockskip:nn {12}{1.5}
+			\tag_struct_begin:n {tag=Div, title=Degree} 
+			\__degree_block:
+			at~the\par
+			% --- Institution name and logo (patched) ---
+			{\Large \g_titlepage_institution_name_tl}\par
+			\vspace{1em}
+			\includegraphics[width=0.3\textwidth]{resources/thu_logo.png}\par
+			\vspace{2em} % <-- space between logo and matriculation number
+			Matriculation \ Number: 3139776\par
+			\vspace{1em} % <-- small space before date
+			% ------------------------------------------
+			\DegreeMonth\ \DegreeYear\par
+			\tag_struct_end:
+			\__titlepage_blockskip:nn {12}{2}
 		}
-		\tag_struct_end: % end section
-		\hypersetup{
-    		pdfcopyright={Copyright\ \DegreeYear\ by\ \CopyrightAuthor.\space \g_copyright_pdfrightstext_tl},
-    		pdfauthor={\g__author_pdfca_tl},
-    		pdfcaptionwriter = {\g__author_pdfca_tl},
-    	}
+		\__titlepage_blockskip:nn {18}{2}
+		\tag_struct_begin:n{tag=Div, title=Signatures}
+		\__signature_block:
+		\tag_struct_end:
+		\__titlepage_bottomskip:
+	}
+	\tag_struct_end: % end section
+	\hypersetup{
+		pdfcopyright={Copyright\ \DegreeYear\ by\ \CopyrightAuthor.\space \g_copyright_pdfrightstext_tl},
+		pdfauthor={\g__author_pdfca_tl},
+		pdfcaptionwriter = {\g__author_pdfca_tl},
+	}
 	\cleardoublepage
 }
+
 
 %%%%%%%%%%  End title page module  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
