@@ -1,0 +1,16 @@
+\contentsline {frontmatter}{List of Figures}{13}{listoffigures}%
+\contentsline {frontmatter}{List of Tables}{15}{listoftables}%
+\contentsline {chapter}{\numberline {1}Introduction}{17}{chapter.1}%
+\contentsline {section}{\numberline {1.1}A section discussing the first issue: \(J/\psi \)}{17}{section.1.1}%
+\contentsline {subsection}{\numberline {1.1.1}Subsection~eqn.~(\ref *{eqn:WT1})}{18}{subsection.1.1.1}%
+\contentsline {subsubsection}{A subsubsection}{19}{section*.10}%
+\contentsline {section}{\numberline {1.2}Description our paradigm}{19}{section.1.2}%
+\contentsline {subsection}{\numberline {1.2.1}Conversion to a metaheuristic}{20}{subsection.1.2.1}%
+\contentsline {section}{\numberline {1.3}Other generalizations}{20}{section.1.3}%
+\contentsline {subsection}{\numberline {1.3.1}The most general case}{20}{subsection.1.3.1}%
+\contentsline {section}{\numberline {1.4}Baroclinic generation of vorticity}{21}{section.1.4}%
+\contentsline {section}{Nomenclature for Chapter~1}{21}{section*.12}%
+\contentsline {chapter}{\numberline {A}Code listing}{23}{appendix.A}%
+\contentsline {chapter}{\numberline {B}One-term coefficients for heat conduction}{25}{appendix.B}%
+\contentsline {section}{\numberline {B.1}A multipage table of numbers}{25}{section.B.1}%
+\contentsline {backmatter}{References}{27}{appendix*.14}%
