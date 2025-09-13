@@ -646,8 +646,8 @@
 
 \tl_new:N   \g_titlepage_supervisor_designation_tl
 \tl_new:N   \g_abstract_supervisor_designation_tl
-\tl_gset:Nn \g_titlepage_supervisor_designation_tl {Thesis~Supervisor} 
-\tl_gset:Nn \g_abstract_supervisor_designation_tl  {Thesis~supervisor}% style per MIT Libraries
+\tl_gset:Nn \g_titlepage_supervisor_designation_tl {} 
+\tl_gset:Nn \g_abstract_supervisor_designation_tl  {}% style per MIT Libraries
 
 % If for some reason you need to change "Thesis Supervisor" to a different string (say, "Doctoral Advisor").
 % Note: this construction removes leading and trailing spaces and change text case of the string.
@@ -832,7 +832,7 @@
 		\mbox {\ and}\linebreak
 		\mbox {the\ \__degree_currdept: }
 	}
-    \linebreak \mbox{on\ \g_dd_thesisdate_tl\ in\ partial\ fulfillment\ of\ the\ requirements\ for\ the\ 
+    \linebreak \mbox{on\ \g_dd_thesisdate_tl\ in\ fulfillment\ of\ the\ requirements\ for\ the\ 
 		\int_compare:nNnTF { \g_degree_degreecnt_int } > {1} {degrees} {degree}
 	\ of}
 	\skip_vertical:n { 6pt plus 2pt minus 2pt }
@@ -895,13 +895,13 @@
     	\int_do_while:nNnn { \g__signature_supno_int } < { \g_supervisor_supervisorcnt_int } {
     		\int_gincr:N  \g__signature_supno_int
     		First\ Supervisor: & \seq_item:cn { g_supervisor_name_seq } { \g__signature_supno_int } \\
-    		& \seq_item:cn { g_supervisor_title_seq } { \g__signature_supno_int },\ 
+    		& \seq_item:cn { g_supervisor_title_seq } { \g__signature_supno_int }\ 
     			\g_titlepage_supervisor_designation_tl \\[1em]
     	}
     	\int_compare:nNnF { \g_acceptor_acceptorcnt_int } = {0} {
         	\int_do_while:nNnn { \g__signature_accno_int } < { \g_acceptor_acceptorcnt_int } {
         		\int_gincr:N  \g__signature_accno_int
-        		Second\ Supervisor: & \seq_item:cn { g_acceptor_name_seq } { \g__signature_accno_int } \\
+        		Secondary\ Supervisor: & \seq_item:cn { g_acceptor_name_seq } { \g__signature_accno_int } \\
         		& \seq_item:cn { g_acceptor_department_seq } { \g__signature_accno_int }
         			\bool_if:NF \g__acceptor_title_tf_bool
         			{
@@ -1086,7 +1086,7 @@
 			\vspace{1em}
 			\includegraphics[width=0.3\textwidth]{resources/thu_logo.png}\par
 			\vspace{2em} % <-- space between logo and matriculation number
-			Matriculation \ Number: 3139776\par
+			Matriculation~Number:~3139776\par
 			\vspace{1em} % <-- small space before date
 			% ------------------------------------------
 			\DegreeMonth\ \DegreeYear\par
