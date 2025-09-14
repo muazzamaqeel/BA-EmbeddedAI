@@ -9,6 +9,8 @@
 #include "scrl.h"
 #include "stm32_lcd.h"
 #include "stm32_lcd_ex.h"
+#include "lvgl.h"
+
 
 #ifdef STM32N6570_DK_REV
   #include "stm32n6570_discovery.h"
