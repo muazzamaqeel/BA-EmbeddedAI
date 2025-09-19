@@ -38,8 +38,14 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "pipeline_start.h"
+#include "app_ui_start.h"   // <— your UI_StartScreen_Show()
 
 #include "xspi_debug.h"
+
+#include "stm32_lcd.h"        // UTIL_LCD_xxx, color defines
+#include "stm32_lcd_ex.h"     // Extended features
+#include "stm32n6570_discovery_ts.h"   // <-- ADD THIS
+
 UART_HandleTypeDef huart1;
 
 static StaticTask_t main_thread;
@@ -350,6 +356,7 @@ static int main_freertos()
 
 
 
+
 static void main_thread_fct(void *arg)
 {
   uint32_t preemptPriority;
@@ -460,12 +467,32 @@ static void main_thread_fct(void *arg)
   LL_APB5_GRP1_EnableClockLowPower(~0);
   LL_MISC_EnableClockLowPower(~0);
 
-  /* Start application */
+  /* ---- LCD / GUI Start ---- */
+  printf("[APP] Initializing LCD...\r\n");
+  if (BSP_LCD_Init(0, LCD_ORIENTATION_LANDSCAPE) != BSP_ERROR_NONE) {
+      printf("[ERROR] LCD init failed!\r\n");
+      Error_Handler();
+  }
+  /* Link UTIL to BSP driver */
+  UTIL_LCD_SetFuncDriver(&LCD_Driver);
+  UTIL_LCD_SetLayer(0);
+  BSP_LCD_DisplayOn(0);
+  /* ---- Touchscreen Init ---- */
+  TS_Init_t hTS;
+  hTS.Width  = 800;   // LCD X resolution
+  hTS.Height = 480;   // LCD Y resolution
+  hTS.Orientation = TS_SWAP_NONE;  // adjust if axes swapped
+  hTS.Accuracy = 5;   // pixels
+  if (BSP_TS_Init(0, &hTS) != BSP_ERROR_NONE) {
+      printf("[ERROR] TS init failed!\r\n");
+      Error_Handler();
+  }
+  printf("[APP] Touchscreen initialized\r\n");
+  UI_StartScreen_Show();
+  UI_WaitForButton();
   Pipeline_Start();
-
   vTaskDelete(NULL);
 }
-
 
 
 

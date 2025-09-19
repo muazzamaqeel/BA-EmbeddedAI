@@ -133,6 +133,7 @@
 									<listOptionValue builtIn="false" value="../../../Lib/screenl/Inc"/>
 									<listOptionValue builtIn="false" value="../../../Lib/tracker"/>
 									<listOptionValue builtIn="false" value="../../../Model/FaceRec/facerec_out"/>
+									<listOptionValue builtIn="false" value="&quot;C:\STM32_FaceRecognition\BA-EmbeddedAI\STM32Cube_FW_N6\Drivers\BSP\Components\gt911&quot;"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.otherflags.315856049" name="Other flags" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.otherflags" useByScannerDiscovery="true" valueType="stringList">
 									<listOptionValue builtIn="false" value=""/>
