@@ -14,7 +14,7 @@
 static void UI_DrawBackground(void)
 {
     /* Draw RGB565 raw image from NOR @0x72000000 */
-	UTIL_LCD_DrawBitmap(0, 0, (uint8_t*)0x72000000);
+	UTIL_LCD_DrawBitmap(0, 0, (uint8_t*)0x77E00000);
 
 
 }
