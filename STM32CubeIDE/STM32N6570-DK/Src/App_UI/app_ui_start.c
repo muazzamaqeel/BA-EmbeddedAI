@@ -4,11 +4,12 @@
 #include "stm32n6570_discovery_ts.h"
 #include <stdio.h>
 
-/* --- Button geometry --- */
-#define BTN_X   280
-#define BTN_Y   200
+/* --- Button geometry (bottom-right) --- */
+#define BTN_X   (800 - 240 - 20)  // X position = 540
+#define BTN_Y   (480 - 60 - 20)   // Y position = 400
 #define BTN_W   240
 #define BTN_H   60
+
 
 static void UI_DrawBackground(void)
 {
@@ -22,12 +23,12 @@ static void UI_DrawBackground(void)
 static void UI_DrawButton(void)
 {
     /* Button background */
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLUE);
-    UTIL_LCD_FillRect(BTN_X, BTN_Y, BTN_W, BTN_H, UTIL_LCD_COLOR_BLUE);
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(BTN_X, BTN_Y, BTN_W, BTN_H, UTIL_LCD_COLOR_WHITE);
 
     /* Button border */
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_DrawRect(BTN_X, BTN_Y, BTN_W, BTN_H, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_DrawRect(BTN_X, BTN_Y, BTN_W, BTN_H, UTIL_LCD_COLOR_BLACK);
 }
 
 void UI_StartScreen_Show(void)
