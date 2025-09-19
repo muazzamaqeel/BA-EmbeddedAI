@@ -182,7 +182,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="Src/Pipeline_FaceRecognition/UserFace/Automation|Lib/AI_Runtime/Npu/ll_aton/ll_aton_osal_rtos_template.c|Lib/ai-postprocessing-wrapper/app_postprocess_od_st_yolox_uf.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+						<entry excluding="Src/App_UI/Resources|Src/Pipeline_FaceRecognition/UserFace/Automation|Lib/AI_Runtime/Npu/ll_aton/ll_aton_osal_rtos_template.c|Lib/ai-postprocessing-wrapper/app_postprocess_od_st_yolox_uf.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>

@@ -12,9 +12,12 @@
 
 static void UI_DrawBackground(void)
 {
-    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_GRAY);
-    UTIL_LCD_Clear(UTIL_LCD_COLOR_GRAY);
+    /* Draw RGB565 raw image from NOR @0x72000000 */
+	UTIL_LCD_DrawBitmap(0, 0, (uint8_t*)0x72000000);
+
+
 }
+
 
 static void UI_DrawButton(void)
 {
