@@ -7,6 +7,8 @@
 #include "app.h"
 #include <stdio.h>
 #include "stm32n6xx_hal.h"
+#include "FreeRTOS.h"
+#include "task.h"              // for vTaskDelay, pdMS_TO_TICKS
 
 int FR_Rebuild_UserFace_Embeddings(void);
 
@@ -19,5 +21,5 @@ void Pipeline_Start(void)
     /* 2) Start normal app pipeline (camera + detector + pp + display) */
     app_run();
     /* 3) Optional: small delay to let the pipeline settle */
-    HAL_Delay(1000);
+    vTaskDelay(pdMS_TO_TICKS(1000));
 }

@@ -2,6 +2,7 @@
 #include "stm32_lcd_ex.h"
 #include "stm32n6570_discovery.h"
 #include "stm32n6570_discovery_ts.h"
+#include "stm32n6570_discovery_lcd.h"
 #include <stdio.h>
 
 /* --- Button geometry (bottom-right) --- */
@@ -15,10 +16,7 @@ static void UI_DrawBackground(void)
 {
     /* Draw RGB565 raw image from NOR @0x72000000 */
 	UTIL_LCD_DrawBitmap(0, 0, (uint8_t*)0x77E00000);
-
-
 }
-
 
 static void UI_DrawButton(void)
 {
