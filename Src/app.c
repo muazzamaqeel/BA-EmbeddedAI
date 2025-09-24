@@ -60,6 +60,8 @@
 #endif
 #include "utils.h"
 #include "face_recognition.h"
+#include "app_touch.h"
+
 /* FaceRec dedicated thread */
 static StaticTask_t fr_thread;
 static StackType_t fr_thread_stack[2 * configMINIMAL_STACK_SIZE];
@@ -1310,6 +1312,9 @@ void app_run()
                           isp_priority,
                           isp_thread_stack, &isp_thread);
   assert(hdl != NULL);
+
+  APP_Touch_Init();
+
 
 }
 
