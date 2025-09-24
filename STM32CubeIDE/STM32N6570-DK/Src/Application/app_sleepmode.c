@@ -15,6 +15,9 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include "app_cam.h"
+#include "stm32n6570_discovery_lcd.h"
+#include "stm32n6570_discovery.h"   // for HAL and GPIO macros
+
 
 static volatile bool g_sleep_active = false;
 static uint32_t g_last_face_time = 0;
@@ -26,6 +29,19 @@ static void exit_sleep(void);
 static StaticTask_t sleep_task_tcb;
 static StackType_t  sleep_task_stack[configMINIMAL_STACK_SIZE];
 static TaskHandle_t hSleepTask = NULL;
+
+
+static void LCD_Backlight_On(void)
+{
+    LCD_DISP_BL_GPIO_CLK_ENABLE();
+    HAL_GPIO_WritePin(LCD_DISP_BL_GPIO_PORT, LCD_DISP_BL_PIN, GPIO_PIN_SET);
+}
+
+static void LCD_Backlight_Off(void)
+{
+    LCD_DISP_BL_GPIO_CLK_ENABLE();
+    HAL_GPIO_WritePin(LCD_DISP_BL_GPIO_PORT, LCD_DISP_BL_PIN, GPIO_PIN_RESET);
+}
 
 /* ===== Public API ===== */
 void APP_SleepMode_Init(void)
@@ -63,24 +79,26 @@ static void enter_sleep(void)
     CMW_CAMERA_Suspend(DCMIPP_PIPE1);
     CMW_CAMERA_Suspend(DCMIPP_PIPE2);
 
-    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_BLACK);
     UTIL_LCD_Clear(UTIL_LCD_COLOR_BLACK);
+
+    BSP_LCD_DisplayOff(0);   // LTDC off
+    LCD_Backlight_Off();     // backlight GPIO off
 }
+
 static void exit_sleep(void)
 {
     if (!g_sleep_active) return;
     g_sleep_active = false;
     printf("[SLEEP] Exiting sleep mode...\r\n");
 
-    // Resume camera pipes safely
+    BSP_LCD_DisplayOn(0);    // LTDC on
+    LCD_Backlight_On();      // backlight GPIO on
+    UTIL_LCD_Clear(UTIL_LCD_COLOR_BLACK);
+
     CMW_CAMERA_Resume(DCMIPP_PIPE1);
     CMW_CAMERA_Resume(DCMIPP_PIPE2);
-
-    // OR, if resume not supported, restart with buffer reassign:
-    // CAM_DisplayPipe_Start(APP_GetLcdBgBuffer0(), CMW_MODE_CONTINUOUS);
-
-    UTIL_LCD_Clear(UTIL_LCD_COLOR_BLACK);
 }
+
 
 /* ===== Task ===== */
 static void SleepMode_Task(void *arg)
