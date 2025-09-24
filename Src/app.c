@@ -61,10 +61,11 @@
 #include "utils.h"
 #include "face_recognition.h"
 #include "app_touch.h"
-
+#include "app_sleepmode.h"
 /* FaceRec dedicated thread */
 static StaticTask_t fr_thread;
 static StackType_t fr_thread_stack[2 * configMINIMAL_STACK_SIZE];
+
 TaskHandle_t g_fr_task = NULL;
 
 #if FR_IN_IS_UINT8
@@ -150,8 +151,17 @@ void Detector_Run(void) {
 //static float g_last_frame[NN_WIDTH * NN_HEIGHT * 3] ALIGN_32 IN_PSRAM;
 /* Global handle so FaceRec can pause NN during extraction */
 TaskHandle_t g_nn_task = NULL;
+extern uint8_t lcd_bg_buffer[DISPLAY_BUFFER_NB][LCD_BG_WIDTH * LCD_BG_HEIGHT * 2];
 
-static void fr_thread_fct(void *arg)
+/* Export LCD background buffer pointer for other modules */
+uint8_t *APP_GetLcdBgBuffer0(void)
+{
+    return lcd_bg_buffer[0];
+}
+
+
+
+static void C_fct(void *arg)
 {
   (void)arg;
   while (1) {
@@ -219,7 +229,7 @@ static const uint32_t colors[NUMBER_COLORS] = {
     UTIL_LCD_COLOR_ORANGE
 };
 /* Lcd Background Buffer */
-static uint8_t lcd_bg_buffer[DISPLAY_BUFFER_NB][LCD_BG_WIDTH * LCD_BG_HEIGHT * 2] ALIGN_32 IN_PSRAM;
+uint8_t lcd_bg_buffer[DISPLAY_BUFFER_NB][LCD_BG_WIDTH * LCD_BG_HEIGHT * 2] ALIGN_32 IN_PSRAM;
 static int lcd_bg_buffer_disp_idx = 1;
 static int lcd_bg_buffer_capt_idx = 0;
 /* Lcd Foreground Buffer */
@@ -503,6 +513,9 @@ static void Display_NetworkOutput_NoTracking(display_info_t *info)
 {
   od_pp_outBuffer_t *rois = info->detects;
   uint32_t nb_rois = info->nb_detect;
+
+  APP_SleepMode_UpdateFaceActivity(nb_rois > 0);
+
   float cpu_load_one_second;
   int line_nb = 0;
   float nn_fps;
@@ -1314,6 +1327,7 @@ void app_run()
   assert(hdl != NULL);
 
   APP_Touch_Init();
+  APP_SleepMode_Init();
 
 
 }
