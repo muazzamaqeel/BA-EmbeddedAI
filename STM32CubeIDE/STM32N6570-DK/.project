@@ -37,41 +37,6 @@
 			<locationURI>PARENT-2-PROJECT_LOC/Model/network.c</locationURI>
 		</link>
 		<link>
-			<name>Src/app.c</name>
-			<type>1</type>
-			<locationURI>PARENT-2-PROJECT_LOC/Src/app.c</locationURI>
-		</link>
-		<link>
-			<name>Src/app_cam.c</name>
-			<type>1</type>
-			<locationURI>PARENT-2-PROJECT_LOC/Src/app_cam.c</locationURI>
-		</link>
-		<link>
-			<name>Src/app_fuseprogramming.c</name>
-			<type>1</type>
-			<locationURI>PARENT-2-PROJECT_LOC/Src/app_fuseprogramming.c</locationURI>
-		</link>
-		<link>
-			<name>Src/freertos_bsp.c</name>
-			<type>1</type>
-			<locationURI>PARENT-2-PROJECT_LOC/Src/freertos_bsp.c</locationURI>
-		</link>
-		<link>
-			<name>Src/main.c</name>
-			<type>1</type>
-			<locationURI>PARENT-2-PROJECT_LOC/Src/main.c</locationURI>
-		</link>
-		<link>
-			<name>Src/stm32_lcd_ex.c</name>
-			<type>1</type>
-			<locationURI>PARENT-2-PROJECT_LOC/Src/stm32_lcd_ex.c</locationURI>
-		</link>
-		<link>
-			<name>Src/stm32n6xx_it.c</name>
-			<type>1</type>
-			<locationURI>PARENT-2-PROJECT_LOC/Src/stm32n6xx_it.c</locationURI>
-		</link>
-		<link>
 			<name>Gcc/Src/console.c</name>
 			<type>1</type>
 			<locationURI>PARENT-2-PROJECT_LOC/Gcc/Src/console.c</locationURI>
@@ -167,6 +132,21 @@
 			<locationURI>PARENT-2-PROJECT_LOC/Lib/tracker/tracker.c</locationURI>
 		</link>
 		<link>
+			<name>Src/Application/app.c</name>
+			<type>1</type>
+			<locationURI>PARENT-2-PROJECT_LOC/Src/app.c</locationURI>
+		</link>
+		<link>
+			<name>Src/Application/app_cam.c</name>
+			<type>1</type>
+			<locationURI>PARENT-2-PROJECT_LOC/Src/app_cam.c</locationURI>
+		</link>
+		<link>
+			<name>Src/Application/main.c</name>
+			<type>1</type>
+			<locationURI>PARENT-2-PROJECT_LOC/Src/main.c</locationURI>
+		</link>
+		<link>
 			<name>Lib/Camera_Middleware/sensors/cmw_imx335.c</name>
 			<type>1</type>
 			<locationURI>PARENT-2-PROJECT_LOC/Lib/Camera_Middleware/sensors/cmw_imx335.c</locationURI>
@@ -220,6 +200,26 @@
 			<name>STM32Cube_FW_N6/Utilities/lcd/stm32_lcd.c</name>
 			<type>1</type>
 			<locationURI>PARENT-2-PROJECT_LOC/STM32Cube_FW_N6/Utilities/lcd/stm32_lcd.c</locationURI>
+		</link>
+		<link>
+			<name>Src/Common/helpers/freertos_bsp.c</name>
+			<type>1</type>
+			<locationURI>PARENT-2-PROJECT_LOC/Src/freertos_bsp.c</locationURI>
+		</link>
+		<link>
+			<name>Src/Common/utils/app_fuseprogramming.c</name>
+			<type>1</type>
+			<locationURI>PARENT-2-PROJECT_LOC/Src/app_fuseprogramming.c</locationURI>
+		</link>
+		<link>
+			<name>Src/Common/utils/stm32_lcd_ex.c</name>
+			<type>1</type>
+			<locationURI>PARENT-2-PROJECT_LOC/Src/stm32_lcd_ex.c</locationURI>
+		</link>
+		<link>
+			<name>Src/Common/utils/stm32n6xx_it.c</name>
+			<type>1</type>
+			<locationURI>PARENT-2-PROJECT_LOC/Src/stm32n6xx_it.c</locationURI>
 		</link>
 		<link>
 			<name>Lib/Camera_Middleware/sensors/imx335/imx335.c</name>
