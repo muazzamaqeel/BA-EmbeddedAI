@@ -21,6 +21,7 @@
 
 static volatile bool g_sleep_active = false;
 static uint32_t g_last_face_time = 0;
+static uint32_t g_wake_time = 0;  // Time when the system last woke up from sleep
 static bool touch_detected_since_last_sleep = false;
 
 static void SleepMode_Task(void *arg);
@@ -71,6 +72,39 @@ void APP_SleepMode_UpdateFaceActivity(bool face_detected)
     }
 }
 
+/* ===== Task ===== */
+static void SleepMode_Task(void *arg)
+{
+    (void)arg;
+    TS_State_t ts;
+    bool face_present_now = false;
+
+    while (1) {
+        if (!g_sleep_active) {
+            // Check if a face is currently present (last update < 500ms ago)
+            face_present_now = (HAL_GetTick() - g_last_face_time) < 500;
+
+            if (!face_present_now) {
+                // No face → start countdown
+                if ((HAL_GetTick() - g_last_face_time) > 7000 &&
+                    !touch_detected_since_last_sleep) {
+                    enter_sleep();
+                }
+            }
+            // else: face present → block sleep completely
+        } else {
+            // Exit sleep only by touch
+            if (BSP_TS_GetState(0, &ts) == BSP_ERROR_NONE && ts.TouchDetected) {
+                if (!touch_detected_since_last_sleep) {
+                    touch_detected_since_last_sleep = true;
+                    exit_sleep();
+                }
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+}
+
 /* ===== Internal ===== */
 static void enter_sleep(void)
 {
@@ -99,31 +133,10 @@ static void exit_sleep(void)
 
     CMW_CAMERA_Resume(DCMIPP_PIPE1);
     CMW_CAMERA_Resume(DCMIPP_PIPE2);
+
+    // Reset flags and timers after exiting sleep mode
+    g_last_face_time = HAL_GetTick();  // Reset face detection timer
+    g_wake_time = g_last_face_time;   // Mark the wake time
+    touch_detected_since_last_sleep = false;  // Reset touch flag
 }
 
-
-/* ===== Task ===== */
-static void SleepMode_Task(void *arg)
-{
-    (void)arg;
-    TS_State_t ts;
-
-    while (1) {
-        if (!g_sleep_active) {
-            // Go to sleep if no face detected for 7 seconds (or replace this with your own logic)
-            if ((HAL_GetTick() - g_last_face_time) > 7000 && !touch_detected_since_last_sleep) { // 7s no face
-                enter_sleep();
-            }
-        } else {
-            // Exit sleep only by touch (no need for face detection)
-            if (BSP_TS_GetState(0, &ts) == BSP_ERROR_NONE && ts.TouchDetected) {
-                // Avoid flickering: exit sleep only once on first touch
-                if (!touch_detected_since_last_sleep) {
-                    touch_detected_since_last_sleep = true;
-                    exit_sleep();
-                }
-            }
-        }
-        vTaskDelay(pdMS_TO_TICKS(200));  // Check every 200ms
-    }
-}
