@@ -1,8 +1,8 @@
 /**
- ******************************************************************************
+ *******************************************************************************
  * @file    app_sleepmode.c
  * @brief   Sleep when no face detected, wake on touch
- ******************************************************************************
+ *******************************************************************************
  */
 
 #include "app_sleepmode.h"
@@ -21,6 +21,7 @@
 
 static volatile bool g_sleep_active = false;
 static uint32_t g_last_face_time = 0;
+static bool touch_detected_since_last_sleep = false;
 
 static void SleepMode_Task(void *arg);
 static void enter_sleep(void);
@@ -66,6 +67,7 @@ void APP_SleepMode_UpdateFaceActivity(bool face_detected)
 {
     if (face_detected) {
         g_last_face_time = HAL_GetTick();
+        touch_detected_since_last_sleep = false;  // Reset touch flag if face detected
     }
 }
 
@@ -108,14 +110,20 @@ static void SleepMode_Task(void *arg)
 
     while (1) {
         if (!g_sleep_active) {
-            if ((HAL_GetTick() - g_last_face_time) > 30000) { // 30s no face
+            // Go to sleep if no face detected for 7 seconds (or replace this with your own logic)
+            if ((HAL_GetTick() - g_last_face_time) > 7000 && !touch_detected_since_last_sleep) { // 7s no face
                 enter_sleep();
             }
         } else {
+            // Exit sleep only by touch (no need for face detection)
             if (BSP_TS_GetState(0, &ts) == BSP_ERROR_NONE && ts.TouchDetected) {
-                exit_sleep();
+                // Avoid flickering: exit sleep only once on first touch
+                if (!touch_detected_since_last_sleep) {
+                    touch_detected_since_last_sleep = true;
+                    exit_sleep();
+                }
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(200));  // Check every 200ms
     }
 }
