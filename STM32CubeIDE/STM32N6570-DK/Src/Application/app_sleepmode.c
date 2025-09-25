@@ -18,11 +18,13 @@
 #include "stm32n6570_discovery_lcd.h"
 #include "stm32n6570_discovery.h"   // for HAL and GPIO macros
 
-
 static volatile bool g_sleep_active = false;
 static uint32_t g_last_face_time = 0;
 static uint32_t g_wake_time = 0;  // Time when the system last woke up from sleep
 static bool touch_detected_since_last_sleep = false;
+
+/* --- NEW: override flag --- */
+static volatile bool g_sleep_disabled_override = false;
 
 static void SleepMode_Task(void *arg);
 static void enter_sleep(void);
@@ -31,7 +33,6 @@ static void exit_sleep(void);
 static StaticTask_t sleep_task_tcb;
 static StackType_t  sleep_task_stack[configMINIMAL_STACK_SIZE];
 static TaskHandle_t hSleepTask = NULL;
-
 
 static void LCD_Backlight_On(void)
 {
@@ -63,6 +64,19 @@ bool APP_SleepMode_IsActive(void)
     return g_sleep_active;
 }
 
+/* --- NEW: public control API --- */
+void APP_SleepMode_Disable(void)
+{
+    g_sleep_disabled_override = true;
+    printf("[SLEEP] Override enabled — sleep disabled\r\n");
+}
+
+void APP_SleepMode_Enable(void)
+{
+    g_sleep_disabled_override = false;
+    printf("[SLEEP] Override cleared — sleep enabled\r\n");
+}
+
 /* Called from detector display/update code */
 void APP_SleepMode_UpdateFaceActivity(bool face_detected)
 {
@@ -80,6 +94,12 @@ static void SleepMode_Task(void *arg)
     bool face_present_now = false;
 
     while (1) {
+        /* --- NEW: skip sleep logic if override is active --- */
+        if (g_sleep_disabled_override) {
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
+
         if (!g_sleep_active) {
             // Check if a face is currently present (last update < 500ms ago)
             face_present_now = (HAL_GetTick() - g_last_face_time) < 500;
@@ -139,4 +159,3 @@ static void exit_sleep(void)
     g_wake_time = g_last_face_time;   // Mark the wake time
     touch_detected_since_last_sleep = false;  // Reset touch flag
 }
-

@@ -8,6 +8,10 @@ extern "C" {
 void APP_SleepMode_Init(void);
 bool APP_SleepMode_IsActive(void);
 
+/* --- NEW: control APIs for override --- */
+void APP_SleepMode_Disable(void);
+void APP_SleepMode_Enable(void);
+
 #ifdef __cplusplus
 }
 #endif
