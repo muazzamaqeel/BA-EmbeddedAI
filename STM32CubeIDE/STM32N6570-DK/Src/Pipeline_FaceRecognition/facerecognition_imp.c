@@ -55,6 +55,7 @@
 #include "fr_helpers.h"               // helpers (frame snapshot, etc.)
 #include "face_recognition.h"         // FR_IN_W/H, FR_EMB_SIZE, FR_IN_IS_UINT8
 #include "facerecognition_imp.h"      // pp_thread_fct declaration
+#include "app_ui_pin.h"
 
 /* If the generated header that declares these isn't included by your BSP,
  * keep these forward decls to avoid implicit-decl warnings. */
@@ -868,6 +869,17 @@ void pp_thread_fct(void *arg)
 
       /* Log result + Top-K */
       printf("[FR] match: %s  cos=%.3f  (dt=%lums)\r\n", final_name, final_s, (unsigned long)dt);
+
+      if (strcmp(final_name, "Unknown") != 0 && final_s >= FR_THR_ON) {
+          // Face recognized with enough confidence
+          printf("[UI] Launching PIN screen for %s...\r\n", final_name);
+
+          UI_PinScreen_Show();
+          UI_PinScreen_WaitForOK();
+
+          printf("[UI] PIN screen done, resuming pipeline...\r\n");
+      }
+
 #if DBG_PRINT_TOPK
       if (K > 0) {
         printf("[FR][Top%d] ", K);

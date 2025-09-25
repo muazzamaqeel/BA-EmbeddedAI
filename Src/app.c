@@ -514,7 +514,11 @@ static void Display_NetworkOutput_NoTracking(display_info_t *info)
   od_pp_outBuffer_t *rois = info->detects;
   uint32_t nb_rois = info->nb_detect;
 
-  APP_SleepMode_UpdateFaceActivity(nb_rois > 0);
+  if (nb_rois > 0) {
+      APP_SleepMode_UpdateFaceActivity(true);
+  } else {
+      APP_SleepMode_UpdateFaceActivity(false);
+  }
 
   float cpu_load_one_second;
   int line_nb = 0;
