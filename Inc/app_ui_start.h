@@ -1,7 +1,14 @@
 #ifndef APP_UI_START_H
 #define APP_UI_START_H
 
-void UI_StartScreen_Show(void);
-void UI_WaitForButton(void);
+/* Result of start screen button press */
+typedef enum {
+    UI_BTN_NONE = 0,
+    UI_BTN_START,
+    UI_BTN_ADMIN
+} UI_ButtonResult_t;
 
-#endif
+void UI_StartScreen_Show(void);
+UI_ButtonResult_t UI_WaitForButton(void);
+
+#endif /* APP_UI_START_H */

@@ -49,6 +49,7 @@
 #include "error_handler.h"
 #include "system_display.h"
 #include "app_sleepmode.h"
+#include "app_ui_start.h"
 
 UART_HandleTypeDef huart1;
 
@@ -136,11 +137,25 @@ if (XSPI_NOR_Map_Once() != 0) {
       Error_Handler();
   }
 
-  UI_StartScreen_Show();
-  UI_WaitForButton();
 
-  Start_ApplicationTasks();
-  APP_SleepMode_Init();    // Start sleep task now, AFTER Start
+  UI_StartScreen_Show();
+  UI_ButtonResult_t choice = UI_WaitForButton();
+
+  if (choice == UI_BTN_START) {
+      Start_ApplicationTasks();
+      APP_SleepMode_Init();
+  } else if (choice == UI_BTN_ADMIN) {
+      // For now: after admin confirm, just return to Start screen
+      UI_StartScreen_Show();
+      choice = UI_WaitForButton();
+      if (choice == UI_BTN_START) {
+          Start_ApplicationTasks();
+          APP_SleepMode_Init();
+      }
+  }
+
+
+
   vTaskDelete(NULL);
 
 }
