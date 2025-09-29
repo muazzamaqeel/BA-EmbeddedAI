@@ -48,6 +48,7 @@
 #include "xspi_nor_init.h"
 #include "error_handler.h"
 #include "system_display.h"
+#include "app_sleepmode.h"
 
 UART_HandleTypeDef huart1;
 
@@ -137,8 +138,11 @@ if (XSPI_NOR_Map_Once() != 0) {
 
   UI_StartScreen_Show();
   UI_WaitForButton();
+
   Start_ApplicationTasks();
+  APP_SleepMode_Init();    // Start sleep task now, AFTER Start
   vTaskDelete(NULL);
+
 }
 
 

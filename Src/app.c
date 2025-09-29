@@ -1331,7 +1331,7 @@ void app_run()
   assert(hdl != NULL);
 
   APP_Touch_Init();
-  APP_SleepMode_Init();
+  //APP_SleepMode_Init();
 
 
 }
