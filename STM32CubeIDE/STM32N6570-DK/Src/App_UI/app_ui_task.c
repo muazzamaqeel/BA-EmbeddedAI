@@ -56,8 +56,9 @@ static void UI_Task(void *arg)
         }
 
         case UI_STATE_PIN: {
-            UI_PinScreen_Show();
-            UI_PinScreen_WaitForOK();
+        	UI_PinScreen_Show("=== PIN SCREEN ===");
+        	UI_PinScreen_WaitForOK("1234");   // normal user PIN
+
             printf("[UI] PIN correct -> go RUNNING\r\n");
             ui_state = UI_STATE_RUNNING;
             break;

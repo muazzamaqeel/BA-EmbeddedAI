@@ -24,9 +24,6 @@
 #define KEYPAD_ORIGIN_X  ((800/2 - (3*KEY_W + 2*KEY_SP)/2))
 #define KEYPAD_ORIGIN_Y  140   // was 160, moved up a bit
 
-/* Expected PIN */
-#define EXPECTED_PIN  "1234"
-
 /* Buffer */
 static char pin_buffer[8];
 static int pin_len = 0;
@@ -118,28 +115,30 @@ static void UI_DrawPinBuffer(void)
 }
 
 /* ===== Public API ===== */
-void UI_PinScreen_Show(void)
+void UI_PinScreen_Show(const char *title)
 {
+    pin_len = 0;
+    memset(pin_buffer, 0, sizeof(pin_buffer));
+
     APP_SleepMode_Disable();   // disable sleep while PIN screen is active
 
-    UTIL_LCD_SetLayer(0);      // 🔧 keep on layer 0 for consistency
+    UTIL_LCD_SetLayer(0);
     BSP_LCD_DisplayOn(0);
 
     UI_DrawBackground();
     UI_DrawKeypad();
     UI_DrawPinBuffer();
 
-    // 🔴 DEBUG OVERLAY
+    // Title overlay
     UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_RED);
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_SetFont(&Font20);
-    UTIL_LCD_DisplayStringAt(0, 0, (uint8_t*)"=== PIN SCREEN ===", CENTER_MODE);
+    UTIL_LCD_DisplayStringAt(0, 0, (uint8_t*)title, CENTER_MODE);
 
-    printf("[UI] PIN screen shown (layer=0, with debug overlay)\r\n");
+    printf("[UI] PIN screen shown with title '%s'\r\n", title);
 }
 
-
-void UI_PinScreen_WaitForOK(void)
+bool UI_PinScreen_WaitForOK(const char *expectedPin)
 {
     TS_State_t ts_state;
     printf("[UI] Waiting for keypad input...\r\n");
@@ -173,10 +172,10 @@ void UI_PinScreen_WaitForOK(void)
                         }
                         else if (strcmp(label,"OK")==0) {
                             pin_buffer[pin_len] = '\0';
-                            if (strcmp(pin_buffer, EXPECTED_PIN)==0) {
+                            if (strcmp(pin_buffer, expectedPin)==0) {
                                 printf("[UI] Correct PIN entered!\r\n");
-                                APP_SleepMode_Enable(); // re-enable sleep
-                                return;
+                                APP_SleepMode_Enable();
+                                return true;
                             } else {
                                 printf("[UI] Wrong PIN!\r\n");
                                 UTIL_LCD_SetBackColor(PIN_BG_COLOR);
@@ -196,7 +195,7 @@ void UI_PinScreen_WaitForOK(void)
                             }
                         }
 
-                        /* Debounce */
+                        // debounce
                         do {
                             BSP_TS_GetState(0, &ts_state);
                             HAL_Delay(30);

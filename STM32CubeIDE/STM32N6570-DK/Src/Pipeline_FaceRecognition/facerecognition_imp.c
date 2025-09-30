@@ -874,8 +874,9 @@ void pp_thread_fct(void *arg)
           // Face recognized with enough confidence
           printf("[UI] Launching PIN screen for %s...\r\n", final_name);
 
-          UI_PinScreen_Show();
-          UI_PinScreen_WaitForOK();
+          UI_PinScreen_Show("=== PIN SCREEN ===");
+          UI_PinScreen_WaitForOK("1234");   // or whichever PIN is correct here
+
 
           printf("[UI] PIN screen done, resuming pipeline...\r\n");
       }

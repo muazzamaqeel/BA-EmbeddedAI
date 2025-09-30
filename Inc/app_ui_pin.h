@@ -1,7 +1,10 @@
 #ifndef APP_UI_PIN_H
 #define APP_UI_PIN_H
 
-void UI_PinScreen_Show(void);
-void UI_PinScreen_WaitForOK(void);
+#include <stdbool.h>
+
+/* PIN screen API */
+void UI_PinScreen_Show(const char *title);
+bool UI_PinScreen_WaitForOK(const char *expectedPin);
 
 #endif
