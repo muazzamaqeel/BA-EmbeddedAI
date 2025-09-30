@@ -122,15 +122,22 @@ void UI_PinScreen_Show(void)
 {
     APP_SleepMode_Disable();   // disable sleep while PIN screen is active
 
-    UTIL_LCD_SetLayer(1);
+    UTIL_LCD_SetLayer(0);      // 🔧 keep on layer 0 for consistency
     BSP_LCD_DisplayOn(0);
 
     UI_DrawBackground();
     UI_DrawKeypad();
     UI_DrawPinBuffer();
 
-    printf("[UI] PIN screen shown (layer=1)\r\n");
+    // 🔴 DEBUG OVERLAY
+    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_RED);
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_SetFont(&Font20);
+    UTIL_LCD_DisplayStringAt(0, 0, (uint8_t*)"=== PIN SCREEN ===", CENTER_MODE);
+
+    printf("[UI] PIN screen shown (layer=0, with debug overlay)\r\n");
 }
+
 
 void UI_PinScreen_WaitForOK(void)
 {

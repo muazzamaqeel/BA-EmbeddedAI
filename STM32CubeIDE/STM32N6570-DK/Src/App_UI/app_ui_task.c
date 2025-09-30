@@ -2,7 +2,7 @@
  ******************************************************************************
  * @file    app_ui_task.c
  * @brief   Central UI task (FreeRTOS) with state machine:
- *          START screen -> ADMIN screen -> PIN screen -> RUNNING
+ *          START screen -> PIN screen -> RUNNING
  ******************************************************************************
  */
 
@@ -12,7 +12,6 @@
 #include <stdio.h>
 
 #include "app_ui_start.h"
-#include "app_ui_admin.h"
 #include "app_ui_pin.h"
 #include "app_sleepmode.h"
 #include "app_tasks.h"   // for Start_ApplicationTasks()
@@ -20,7 +19,6 @@
 /* ====== UI States ====== */
 typedef enum {
     UI_STATE_START,
-    UI_STATE_ADMIN,
     UI_STATE_PIN,
     UI_STATE_RUNNING
 } UI_State_t;
@@ -49,22 +47,9 @@ static void UI_Task(void *arg)
             if (btn == UI_BTN_START) {
                 printf("[UI] Start pressed -> go RUNNING\r\n");
                 ui_state = UI_STATE_RUNNING;
-            } else if (btn == UI_BTN_ADMIN) {
-                printf("[UI] Admin pressed -> go ADMIN\r\n");
-                ui_state = UI_STATE_ADMIN;
             }
-            break;
-        }
-
-        case UI_STATE_ADMIN: {
-            UI_AdminScreen_Show();
-            UI_AdminResult_t res = UI_AdminScreen_WaitForTouch();
-
-            if (res == UI_ADMIN_BACK) {
-                printf("[UI] Admin -> Back -> START\r\n");
-                ui_state = UI_STATE_START;
-            } else if (res == UI_ADMIN_OK) {
-                printf("[UI] Admin confirmed -> PIN screen\r\n");
+            else if (btn == UI_BTN_PIN) {
+                printf("[UI] PIN button pressed -> go PIN\r\n");
                 ui_state = UI_STATE_PIN;
             }
             break;
@@ -74,8 +59,6 @@ static void UI_Task(void *arg)
             UI_PinScreen_Show();
             UI_PinScreen_WaitForOK();
             printf("[UI] PIN correct -> go RUNNING\r\n");
-
-            APP_SleepMode_Enable();   // re-enable sleep
             ui_state = UI_STATE_RUNNING;
             break;
         }
@@ -100,17 +83,23 @@ static void UI_Task(void *arg)
     }
 }
 
-/* ====== Public API ====== */
 void UI_StartTask(void)
 {
-    TaskHandle_t hdl = xTaskCreateStatic(
-        UI_Task,                        // Task function
-        "UI",                           // Task name
-        sizeof(ui_task_stack) / sizeof(StackType_t), // Stack depth in words
-        NULL,                           // Task argument
-        tskIDLE_PRIORITY + 2,           // Priority
-        ui_task_stack,                  // Stack buffer
-        &ui_task_tcb                    // TCB buffer
+    static TaskHandle_t hdl = NULL;
+
+    if (hdl != NULL) {
+        printf("[UI_StartTask] UI task already created, skipping.\r\n");
+        return;
+    }
+
+    hdl = xTaskCreateStatic(
+        UI_Task,
+        "UI",
+        sizeof(ui_task_stack) / sizeof(StackType_t),
+        NULL,
+        tskIDLE_PRIORITY + 2,
+        ui_task_stack,
+        &ui_task_tcb
     );
 
     configASSERT(hdl != NULL);
