@@ -138,21 +138,8 @@ if (XSPI_NOR_Map_Once() != 0) {
   }
 
 
-  UI_StartScreen_Show();
-  UI_ButtonResult_t choice = UI_WaitForButton();
-
-  if (choice == UI_BTN_START) {
-      Start_ApplicationTasks();
-      APP_SleepMode_Init();
-  } else if (choice == UI_BTN_ADMIN) {
-      // For now: after admin confirm, just return to Start screen
-      UI_StartScreen_Show();
-      choice = UI_WaitForButton();
-      if (choice == UI_BTN_START) {
-          Start_ApplicationTasks();
-          APP_SleepMode_Init();
-      }
-  }
+  extern void UI_StartTask(void);
+  UI_StartTask();
 
 
 
