@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    app_ui_pin.c
- * @brief   PIN entry / Auth screen with keypad (centered, debounced)
+ * @brief   PIN entry / Auth screen with keypad (transparent boxes only, adjusted spacing)
  ******************************************************************************
  */
 
@@ -20,9 +20,9 @@
 #define KEY_H   65
 #define KEY_SP  20
 
-/* Center the keypad slightly higher on screen */
+/* Center keypad slightly higher on screen */
 #define KEYPAD_ORIGIN_X  ((800/2 - (3*KEY_W + 2*KEY_SP)/2))
-#define KEYPAD_ORIGIN_Y  140   // was 160, moved up a bit
+#define KEYPAD_ORIGIN_Y  100   // was 140 → moved 40px up
 
 /* Expected PIN */
 #define EXPECTED_PIN  "1234"
@@ -31,38 +31,46 @@
 static char pin_buffer[8];
 static int pin_len = 0;
 
-/* Grey background color */
-#define PIN_BG_COLOR  UTIL_LCD_COLOR_LIGHTGRAY
-
 /* ===== Internal helpers ===== */
 static void UI_DrawBackground(void)
 {
     /* Draw RGB565 raw image from NOR at 0x77AE0000 */
     UTIL_LCD_DrawBitmap(0, 0, (uint8_t*)0x77AE0000);
-
     printf("[UI] PIN background drawn (image @0x77AE0000)\r\n");
 }
 
-
 static void UI_DrawKey(int row, int col, const char *label,
-                       uint32_t fillColor, uint32_t textColor)
+                       uint32_t borderColor, uint32_t textColor)
 {
     int x = KEYPAD_ORIGIN_X + col * (KEY_W + KEY_SP);
     int y = KEYPAD_ORIGIN_Y + row * (KEY_H + KEY_SP);
 
-    UTIL_LCD_SetTextColor(fillColor);
-    UTIL_LCD_FillRect(x, y, KEY_W, KEY_H, fillColor);
+    /* Push row 7-8-9 a bit lower */
+    if (row == 2) {
+        y += 15;
+    }
 
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_DrawRect(x, y, KEY_W, KEY_H, UTIL_LCD_COLOR_BLACK);
+    /* Push last row (CLR, 0, OK) even lower */
+    if (row == 3) {
+        y += 20;
+    }
 
-    UTIL_LCD_SetBackColor(fillColor);
+    /* Push rightmost column (3,6,9,OK) a bit LEFT */
+    if (col == 2) {
+        x -= 15;   // adjust value for visual balance
+    }
+
+    /* Draw border only */
+    UTIL_LCD_SetTextColor(borderColor);
+    UTIL_LCD_DrawRect(x, y, KEY_W, KEY_H, borderColor);
+
+    /* Draw label text */
     UTIL_LCD_SetTextColor(textColor);
     UTIL_LCD_SetFont(&Font20);
     UTIL_LCD_DisplayStringAt(x + KEY_W/2 - 10, y + KEY_H/2 - 10,
                              (uint8_t*)label, LEFT_MODE);
 
-    printf("[UI] Key drawn '%s' @ (%d,%d)\r\n", label, x, y);
+    printf("[UI] Transparent key zone '%s' @ (%d,%d)\r\n", label, x, y);
 }
 
 static void UI_DrawKeypad(void)
@@ -77,18 +85,13 @@ static void UI_DrawKeypad(void)
     for (int r=0; r<4; r++) {
         for (int c=0; c<3; c++) {
             const char *label = keys[r][c];
-            uint32_t fill = UTIL_LCD_COLOR_WHITE;
-            uint32_t text = UTIL_LCD_COLOR_BLACK;
+            uint32_t border = UTIL_LCD_COLOR_WHITE;
+            uint32_t text   = UTIL_LCD_COLOR_WHITE;
 
-            if (strcmp(label,"CLR")==0) {
-                fill = UTIL_LCD_COLOR_RED;
-                text = UTIL_LCD_COLOR_WHITE;
-            } else if (strcmp(label,"OK")==0) {
-                fill = UTIL_LCD_COLOR_GREEN;
-                text = UTIL_LCD_COLOR_WHITE;
-            }
+            if (strcmp(label,"CLR")==0) border = UTIL_LCD_COLOR_RED;
+            else if (strcmp(label,"OK")==0) border = UTIL_LCD_COLOR_GREEN;
 
-            UI_DrawKey(r, c, label, fill, text);
+            UI_DrawKey(r, c, label, border, text);
         }
     }
 }
@@ -99,21 +102,10 @@ static void UI_DrawPinBuffer(void)
     memset(disp, '*', pin_len);
     disp[pin_len] = '\0';
 
-    // Clear area
-    UTIL_LCD_SetBackColor(PIN_BG_COLOR);
-    UTIL_LCD_SetTextColor(PIN_BG_COLOR);
-    UTIL_LCD_FillRect(200, 60, 400, 50, PIN_BG_COLOR); // moved up (was 80)
-
-    // White box
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(200, 60, 400, 50, UTIL_LCD_COLOR_WHITE);
+    /* Just clear text area (moved up 40px) */
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_DrawRect(200, 60, 400, 50, UTIL_LCD_COLOR_BLACK);
-
-    // Masked PIN
-    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_SetFont(&Font20);
-    UTIL_LCD_DisplayStringAt(220, 75, (uint8_t*)disp, LEFT_MODE);
+    UTIL_LCD_DisplayStringAt(220, 35, (uint8_t*)disp, LEFT_MODE);
 
     printf("[UI] PIN buffer updated: '%s'\r\n", disp);
 }
@@ -148,6 +140,17 @@ void UI_PinScreen_WaitForOK(void)
                     int x = KEYPAD_ORIGIN_X + c * (KEY_W + KEY_SP);
                     int y = KEYPAD_ORIGIN_Y + r * (KEY_H + KEY_SP);
 
+                    /* Apply same offsets for touch detection */
+                    if (r == 2) {
+                        y += 15;
+                    }
+                    if (r == 3) {
+                        y += 20;
+                    }
+                    if (c == 2) {
+                        x -= 15;
+                    }
+
                     if (tx >= x && tx <= x+KEY_W &&
                         ty >= y && ty <= y+KEY_H) {
 
@@ -173,9 +176,8 @@ void UI_PinScreen_WaitForOK(void)
                                 return;
                             } else {
                                 printf("[UI] Wrong PIN!\r\n");
-                                UTIL_LCD_SetBackColor(PIN_BG_COLOR);
                                 UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_RED);
-                                UTIL_LCD_DisplayStringAt(220, 120,
+                                UTIL_LCD_DisplayStringAt(220, 85,
                                     (uint8_t*)"Wrong PIN", LEFT_MODE);
 
                                 pin_len = 0;
