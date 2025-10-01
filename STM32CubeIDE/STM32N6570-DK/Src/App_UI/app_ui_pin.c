@@ -37,11 +37,12 @@ static int pin_len = 0;
 /* ===== Internal helpers ===== */
 static void UI_DrawBackground(void)
 {
-    UTIL_LCD_SetBackColor(PIN_BG_COLOR);
-    UTIL_LCD_SetTextColor(PIN_BG_COLOR);
-    UTIL_LCD_FillRect(0, 0, 800, 480, PIN_BG_COLOR);
-    printf("[UI] PIN background drawn (grey)\r\n");
+    /* Draw RGB565 raw image from NOR at 0x77AE0000 */
+    UTIL_LCD_DrawBitmap(0, 0, (uint8_t*)0x77AE0000);
+
+    printf("[UI] PIN background drawn (image @0x77AE0000)\r\n");
 }
+
 
 static void UI_DrawKey(int row, int col, const char *label,
                        uint32_t fillColor, uint32_t textColor)
