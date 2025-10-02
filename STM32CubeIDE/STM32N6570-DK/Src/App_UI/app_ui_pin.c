@@ -70,75 +70,74 @@ void UI_PinScreen_Show(void)
 void UI_PinScreen_WaitForOK(void)
 {
     TS_State_t ts_state;
+    bool touch_active = false;   // track if finger is currently down
+
     printf("[UI] Waiting for keypad input (hidden)...\r\n");
 
     while (1) {
-        if (BSP_TS_GetState(0, &ts_state) == BSP_ERROR_NONE && ts_state.TouchDetected) {
-            uint16_t tx = ts_state.TouchX;
-            uint16_t ty = ts_state.TouchY;
+        if (BSP_TS_GetState(0, &ts_state) == BSP_ERROR_NONE) {
+            if (ts_state.TouchDetected && !touch_active) {
+                // --- First press detected ---
+                touch_active = true;   // lock until finger lifted
+                uint16_t tx = ts_state.TouchX;
+                uint16_t ty = ts_state.TouchY;
 
-            for (int r=0; r<4; r++) {
-                for (int c=0; c<3; c++) {
-                    int x = KEYPAD_ORIGIN_X + c * (KEY_W + KEY_SP);
-                    int y = KEYPAD_ORIGIN_Y + r * (KEY_H + KEY_SP);
+                for (int r=0; r<4; r++) {
+                    for (int c=0; c<3; c++) {
+                        int x = KEYPAD_ORIGIN_X + c * (KEY_W + KEY_SP);
+                        int y = KEYPAD_ORIGIN_Y + r * (KEY_H + KEY_SP);
 
-                    /* Row offsets */
-                    if (r == 1) { y += 10; }
-                    if (r == 2) { y += 25; }
-                    if (r == 3) { y += 40; }
+                        if (r == 1) y += 10;
+                        if (r == 2) y += 25;
+                        if (r == 3) y += 40;
+                        if (c == 2) x -= 15;
 
-                    /* Col offset */
-                    if (c == 2) { x -= 15; }
+                        if (tx >= x && tx <= x+KEY_W &&
+                            ty >= y && ty <= y+KEY_H) {
 
-                    if (tx >= x && tx <= x+KEY_W &&
-                        ty >= y && ty <= y+KEY_H) {
+                            const char *keys[4][3] = {
+                                {"1","2","3"},
+                                {"4","5","6"},
+                                {"7","8","9"},
+                                {"CLR","0","OK"}
+                            };
+                            const char *label = keys[r][c];
+                            printf("[TS] Hidden key pressed: %s\r\n", label);
 
-                        const char *keys[4][3] = {
-                            {"1","2","3"},
-                            {"4","5","6"},
-                            {"7","8","9"},
-                            {"CLR","0","OK"}
-                        };
-                        const char *label = keys[r][c];
-                        printf("[TS] Hidden key pressed: %s\r\n", label);
-
-                        if (strcmp(label,"CLR")==0) {
-                            pin_len = 0;
-                            memset(pin_buffer,0,sizeof(pin_buffer));
-                            UI_DrawPinBuffer();
-                        }
-                        else if (strcmp(label,"OK")==0) {
-                            pin_buffer[pin_len] = '\0';
-                            if (strcmp(pin_buffer, EXPECTED_PIN)==0) {
-                                printf("[UI] Correct PIN entered!\r\n");
-                                APP_SleepMode_Enable(); // re-enable sleep
-                                return;
-                            } else {
-                                // WRONG PIN → silently reset (no text shown)
-                                printf("[UI] Wrong PIN (hidden, no message)\r\n");
+                            if (strcmp(label,"CLR")==0) {
                                 pin_len = 0;
                                 memset(pin_buffer,0,sizeof(pin_buffer));
                                 UI_DrawPinBuffer();
                             }
-                        }
-                        else {
-                            if (pin_len < (int)(sizeof(pin_buffer)-1)) {
-                                pin_buffer[pin_len++] = label[0];
-                                UI_DrawPinBuffer();
+                            else if (strcmp(label,"OK")==0) {
+                                pin_buffer[pin_len] = '\0';
+                                if (strcmp(pin_buffer, EXPECTED_PIN)==0) {
+                                    printf("[UI] Correct PIN entered!\r\n");
+                                    APP_SleepMode_Enable();
+                                    return;
+                                } else {
+                                    printf("[UI] Wrong PIN (hidden, no message)\r\n");
+                                    pin_len = 0;
+                                    memset(pin_buffer,0,sizeof(pin_buffer));
+                                    UI_DrawPinBuffer();
+                                }
+                            }
+                            else {
+                                if (pin_len < (int)(sizeof(pin_buffer)-1)) {
+                                    pin_buffer[pin_len++] = label[0];
+                                    UI_DrawPinBuffer();
+                                }
                             }
                         }
-
-                        /* Debounce */
-                        do {
-                            BSP_TS_GetState(0, &ts_state);
-                            HAL_Delay(30);
-                        } while (ts_state.TouchDetected);
-
-                        HAL_Delay(150);
                     }
                 }
             }
+            else if (!ts_state.TouchDetected) {
+                // --- Finger lifted → reset state ---
+                touch_active = false;
+            }
         }
-        HAL_Delay(50);
+        HAL_Delay(30); // smaller polling delay is fine
     }
 }
+
