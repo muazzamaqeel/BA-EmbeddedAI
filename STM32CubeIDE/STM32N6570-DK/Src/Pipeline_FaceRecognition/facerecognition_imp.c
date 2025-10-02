@@ -56,7 +56,7 @@
 #include "face_recognition.h"         // FR_IN_W/H, FR_EMB_SIZE, FR_IN_IS_UINT8
 #include "facerecognition_imp.h"      // pp_thread_fct declaration
 #include "app_ui_pin.h"
-
+#include "app_ui_pin_face_rec.h"
 /* If the generated header that declares these isn't included by your BSP,
  * keep these forward decls to avoid implicit-decl warnings. */
 const LL_Buffer_InfoTypeDef *LL_ATON_Input_Buffers_Info_face_recognition(void);
@@ -873,10 +873,8 @@ void pp_thread_fct(void *arg)
       if (strcmp(final_name, "Unknown") != 0 && final_s >= FR_THR_ON) {
           // Face recognized with enough confidence
           printf("[UI] Launching PIN screen for %s...\r\n", final_name);
-
-          UI_PinScreen_Show();
-          UI_PinScreen_WaitForOK();
-
+          UI_FR_PinScreen_Show();
+          UI_FR_PinScreen_WaitForOK();
           printf("[UI] PIN screen done, resuming pipeline...\r\n");
       }
 
