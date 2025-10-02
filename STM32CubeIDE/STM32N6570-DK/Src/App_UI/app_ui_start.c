@@ -5,6 +5,7 @@
 #include "stm32n6570_discovery_lcd.h"
 #include <stdio.h>
 #include "app_ui_start.h"
+#include "app_ui_pin.h"   // <-- needed for PIN screen functions
 
 /* --- Start button (bottom-right) --- */
 #define BTN_START_X   (800 - 240 - 20)  // 540
@@ -69,9 +70,17 @@ UI_ButtonResult UI_WaitForButton(void)
                 printf("[UI] Start pressed!\r\n");
                 return UI_BTN_START;
             }
+
             if (tx >= BTN_ADMIN_X && tx <= BTN_ADMIN_X + BTN_ADMIN_W &&
                 ty >= BTN_ADMIN_Y && ty <= BTN_ADMIN_Y + BTN_ADMIN_H) {
                 printf("[UI] Admin pressed!\r\n");
+
+                // --- Show PIN screen directly ---
+                UI_PinScreen_Show();
+                UI_PinScreen_WaitForOK();
+
+                printf("[UI] PIN screen finished, returning to start menu...\r\n");
+
                 return UI_BTN_ADMIN;
             }
         }

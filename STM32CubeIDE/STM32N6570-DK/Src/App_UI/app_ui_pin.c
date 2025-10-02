@@ -45,14 +45,15 @@ static void UI_DrawKey(int row, int col, const char *label,
     int x = KEYPAD_ORIGIN_X + col * (KEY_W + KEY_SP);
     int y = KEYPAD_ORIGIN_Y + row * (KEY_H + KEY_SP);
 
-    /* Push row 7-8-9 a bit lower */
-    if (row == 2) {
-        y += 15;
+    /* Row offsets for better vertical spacing */
+    if (row == 1) {        // 4-5-6
+        y += 10;
     }
-
-    /* Push last row (CLR, 0, OK) even lower */
-    if (row == 3) {
-        y += 20;
+    if (row == 2) {        // 7-8-9
+        y += 25;
+    }
+    if (row == 3) {        // CLR,0,OK
+        y += 40;
     }
 
     /* Push rightmost column (3,6,9,OK) a bit LEFT */
@@ -102,7 +103,7 @@ static void UI_DrawPinBuffer(void)
     memset(disp, '*', pin_len);
     disp[pin_len] = '\0';
 
-    /* Just clear text area (moved up 40px) */
+    /* PIN stars */
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
     UTIL_LCD_SetFont(&Font20);
     UTIL_LCD_DisplayStringAt(220, 35, (uint8_t*)disp, LEFT_MODE);
@@ -115,15 +116,16 @@ void UI_PinScreen_Show(void)
 {
     APP_SleepMode_Disable();   // disable sleep while PIN screen is active
 
-    UTIL_LCD_SetLayer(1);
+    UTIL_LCD_SetLayer(0);
     BSP_LCD_DisplayOn(0);
 
     UI_DrawBackground();
     UI_DrawKeypad();
     UI_DrawPinBuffer();
 
-    printf("[UI] PIN screen shown (layer=1)\r\n");
+    printf("[UI] PIN screen shown (layer=0)\r\n");
 }
+
 
 void UI_PinScreen_WaitForOK(void)
 {
@@ -140,16 +142,13 @@ void UI_PinScreen_WaitForOK(void)
                     int x = KEYPAD_ORIGIN_X + c * (KEY_W + KEY_SP);
                     int y = KEYPAD_ORIGIN_Y + r * (KEY_H + KEY_SP);
 
-                    /* Apply same offsets for touch detection */
-                    if (r == 2) {
-                        y += 15;
-                    }
-                    if (r == 3) {
-                        y += 20;
-                    }
-                    if (c == 2) {
-                        x -= 15;
-                    }
+                    /* Apply same row offsets for touch detection */
+                    if (r == 1) { y += 10; }
+                    if (r == 2) { y += 25; }
+                    if (r == 3) { y += 40; }
+
+                    /* Apply same col offset */
+                    if (c == 2) { x -= 15; }
 
                     if (tx >= x && tx <= x+KEY_W &&
                         ty >= y && ty <= y+KEY_H) {
