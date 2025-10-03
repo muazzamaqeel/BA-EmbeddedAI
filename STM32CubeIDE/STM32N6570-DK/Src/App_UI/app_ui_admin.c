@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include "app_ui_admin.h"
 #include <stdbool.h>
+#include "app_change_pin.h"
 
 /* --- Address of Admin background image in NOR Flash --- */
 #define ADMIN_BG_ADDR   ((uint32_t)0x778A0000)
@@ -58,7 +59,9 @@ void UI_AdminScreen_Show(void)
 
                 if (tx >= BTN1_X && tx <= BTN1_X + BTN1_W &&
                     ty >= BTN1_Y && ty <= BTN1_Y + BTN1_H) {
-                    printf("[UI] Admin Button1 pressed\r\n");
+                    printf("[UI] Admin Button1 pressed (Change PIN)\r\n");
+                    UI_ChangePinScreen_Show();
+                    UI_Admin_DrawBackground();   // redraw Admin screen after return
                 }
                 else if (tx >= BTN2_X && tx <= BTN2_X + BTN2_W &&
                          ty >= BTN2_Y && ty <= BTN2_Y + BTN2_H) {
