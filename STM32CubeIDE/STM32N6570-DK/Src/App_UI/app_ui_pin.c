@@ -115,7 +115,8 @@ void UI_PinScreen_WaitForOK(void)
                                     printf("[UI] Correct PIN entered!\r\n");
                                     APP_SleepMode_Enable();
                                     return;
-                                } else {
+                                }
+                                else {
                                     printf("[UI] Wrong PIN (hidden, no message)\r\n");
                                     pin_len = 0;
                                     memset(pin_buffer,0,sizeof(pin_buffer));
