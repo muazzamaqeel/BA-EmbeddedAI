@@ -60,8 +60,25 @@ void UI_AdminScreen_Show(void)
                 if (tx >= BTN1_X && tx <= BTN1_X + BTN1_W &&
                     ty >= BTN1_Y && ty <= BTN1_Y + BTN1_H) {
                     printf("[UI] Admin Button1 pressed (Change PIN)\r\n");
-                    UI_ChangePinScreen_Show();
-                    UI_Admin_DrawBackground();   // redraw Admin screen after return
+                    CP_Result res = UI_ChangePinScreen_Show();
+
+                    if (res == CP_RESULT_BACK_TO_START) {
+                        printf("[UI] Returning to Start screen after PIN change\r\n");
+
+                        // --- Clear any lingering touch ---
+                        TS_State_t ts_state;
+                        for (int i = 0; i < 10; i++) {
+                            BSP_TS_GetState(0, &ts_state);
+                            if (!ts_state.TouchDetected)
+                                break;
+                            HAL_Delay(50);
+                        }
+
+                        return;
+                    }
+                    else {
+                        UI_Admin_DrawBackground(); // stay in admin if needed
+                    }
                 }
                 else if (tx >= BTN2_X && tx <= BTN2_X + BTN2_W &&
                          ty >= BTN2_Y && ty <= BTN2_Y + BTN2_H) {

@@ -137,19 +137,23 @@ if (XSPI_NOR_Map_Once() != 0) {
   }
 
 
-  UI_StartScreen_Show();
-  UI_ButtonResult res = UI_WaitForButton();
+  while (1) {
+      UI_StartScreen_Show();
+      UI_ButtonResult res = UI_WaitForButton();
 
-  if (res == UI_BTN_START) {
-      printf("[MAIN] Launching application pipeline...\r\n");
-      Start_ApplicationTasks();
-      APP_SleepMode_Init();
+      if (res == UI_BTN_START) {
+          printf("[MAIN] Launching application pipeline...\r\n");
+          Start_ApplicationTasks();
+          APP_SleepMode_Init();
+          break; // or return if pipeline runs forever
+      }
+      else if (res == UI_BTN_ADMIN) {
+          printf("[MAIN] Launching Admin screen...\r\n");
+          UI_AdminScreen_Show();
+          // when Admin returns (after Change PIN), loop back → Start screen
+      }
   }
-  else if (res == UI_BTN_ADMIN) {
-      printf("[MAIN] Launching Admin screen only...\r\n");
-      UI_AdminScreen_Show();
-      // Do NOT start pipeline
-  }
+
 
 
 
