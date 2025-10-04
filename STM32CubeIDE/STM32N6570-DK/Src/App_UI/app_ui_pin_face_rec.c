@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include "app_change_pin.h"
 #include "app_sleepmode.h"
 
 /* --- Keypad layout --- */
@@ -28,7 +29,7 @@
 #define FR_KEYPAD_ORIGIN_Y  140
 
 /* Expected PIN */
-#define FR_EXPECTED_PIN  "1234"
+//#define FR_EXPECTED_PIN  "1234"
 
 /* Buffer */
 static char fr_pin_buffer[8];
@@ -169,7 +170,7 @@ void UI_FR_PinScreen_WaitForOK(void)
                         }
                         else if (strcmp(label,"OK")==0) {
                             fr_pin_buffer[fr_pin_len] = '\0';
-                            if (strcmp(fr_pin_buffer, FR_EXPECTED_PIN)==0) {
+                            if (strcmp(fr_pin_buffer, g_current_pin) == 0) {
                                 printf("[UI-FR] Correct PIN entered!\r\n");
                                 APP_SleepMode_Enable();
                                 return;
