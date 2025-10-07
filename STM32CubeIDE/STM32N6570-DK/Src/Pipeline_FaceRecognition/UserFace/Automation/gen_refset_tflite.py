@@ -2,6 +2,7 @@
 import argparse, os, glob, pathlib
 import numpy as np
 from PIL import Image
+import warnings  # <-- added
 
 # Prefer tflite-runtime; fall back to TF Lite interpreter
 try:
@@ -9,6 +10,8 @@ try:
     _TFLITE = True
 except Exception:
     import tensorflow as tf
+    # suppress TF 2.20+ deprecation warning for tf.lite.Interpreter
+    warnings.filterwarnings("ignore", message=".*tf.lite.Interpreter is deprecated.*")
     tflite = tf.lite
     _TFLITE = False
 
