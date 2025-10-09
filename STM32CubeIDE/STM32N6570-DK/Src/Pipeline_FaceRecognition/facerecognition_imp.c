@@ -466,11 +466,18 @@ void pp_thread_fct(void *arg)
     }
   }
 
-  /* Build combined reference set from all generated embeddings */
   FR_BuildCombinedRefset();
   printf("[FR] Combined reference set built — total %d entries\r\n", g_ref_set_count);
-  FR_DecryptAllRefsetOnce();   // 🔒 decrypts all embeddings once at startup
 
+  /* [DELAYED DECRYPTION]
+   * Wait until hardware AES/SAES clocks are stable before starting CMOX AES.
+   * FreeRTOS delay ensures other init tasks complete first.
+   */
+  vTaskDelay(pdMS_TO_TICKS(2000));  // 2 seconds delay after system start
+
+  printf("[DEC] cmox initialized (delayed)\r\n");
+  FR_DecryptAllRefsetOnce();   // 🔒 safe now
+  printf("[DEC] Decryption completed successfully.\r\n");
 
   void *pp_input[NN_OUT_NB];
   uint32_t pp_len[NN_OUT_NB];
