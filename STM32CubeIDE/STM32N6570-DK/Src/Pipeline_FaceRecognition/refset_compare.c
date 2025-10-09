@@ -14,9 +14,11 @@
 
 /* ---- This typedef MUST match the one in your Generated/embeddings_table.c ---- */
 typedef struct { const char* name; const float* data; int dim; } EmbRec;
-/* Externs provided by your Generated/embeddings_table.c */
-extern const EmbRec g_ref_set[];
-extern const int    g_ref_set_count;
+/* Externs provided by Generated/combined_refset.c */
+extern EmbRec* g_ref_set;
+extern int     g_ref_set_count;
+void FR_BuildCombinedRefset(void);
+
 
 /* FR output buffer discovery */
 extern const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);

@@ -8,7 +8,7 @@
 
 typedef struct { const char* name; const float* data; int dim; } EmbRec;
 
-#define REF_NAME "Muazzam"
+#define REF_NAME "Keti"
 
 static const float emb_0[] = {
   -0.04667177f, -0.04667177f, -0.05445040f, 0.02333589f, 0.00777863f, 0.03111451f, 0.00777863f, 0.01555726f,

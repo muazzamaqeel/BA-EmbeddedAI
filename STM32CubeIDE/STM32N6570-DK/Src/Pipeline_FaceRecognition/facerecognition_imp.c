@@ -189,9 +189,12 @@ extern display_t disp;
 extern volatile char g_fr_overlay_label[32];
 
 /* ---- Reference set compiled in Generated/embeddings_table.c ---- */
+/* ---- Auto-generated combined reference set ---- */
 typedef struct { const char* name; const float* data; int dim; } EmbRec;
-extern const EmbRec g_ref_set[];
-extern const int    g_ref_set_count;
+extern EmbRec* g_ref_set;
+extern int     g_ref_set_count;
+extern void    FR_BuildCombinedRefset(void);
+
 
 /* ---------------- helpers ---------------- */
 
@@ -460,6 +463,11 @@ void pp_thread_fct(void *arg)
              i, nm, blen, blen / (unsigned long)sizeof(float));
     }
   }
+
+  /* Build combined reference set from all generated embeddings */
+  FR_BuildCombinedRefset();
+  printf("[FR] Combined reference set built — total %d entries\r\n", g_ref_set_count);
+
 
   void *pp_input[NN_OUT_NB];
   uint32_t pp_len[NN_OUT_NB];
