@@ -1,8 +1,10 @@
 /* Auto-generated merged reference set — DO NOT EDIT */
 #include <stddef.h>
+#include <stdint.h>
+
 #ifndef EMBREC_DEFINED
 #define EMBREC_DEFINED
-typedef struct { const char* name; const float* data; int dim; } EmbRec;
+typedef struct { const char* name; const uint8_t* data; int dim; } EmbRec;
 #endif
 
 #include "embeddings_table_Aida.c"

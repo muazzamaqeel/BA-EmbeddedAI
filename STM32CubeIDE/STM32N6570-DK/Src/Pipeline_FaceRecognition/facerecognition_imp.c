@@ -57,6 +57,8 @@
 #include "facerecognition_imp.h"      // pp_thread_fct declaration
 #include "app_ui_pin.h"
 #include "app_ui_pin_face_rec.h"
+#include "crypto_utils.h"
+
 /* If the generated header that declares these isn't included by your BSP,
  * keep these forward decls to avoid implicit-decl warnings. */
 const LL_Buffer_InfoTypeDef *LL_ATON_Input_Buffers_Info_face_recognition(void);
@@ -467,6 +469,7 @@ void pp_thread_fct(void *arg)
   /* Build combined reference set from all generated embeddings */
   FR_BuildCombinedRefset();
   printf("[FR] Combined reference set built — total %d entries\r\n", g_ref_set_count);
+  FR_DecryptAllRefsetOnce();   // 🔒 decrypts all embeddings once at startup
 
 
   void *pp_input[NN_OUT_NB];
