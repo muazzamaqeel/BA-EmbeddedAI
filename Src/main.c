@@ -49,6 +49,7 @@
 #include "error_handler.h"
 #include "system_display.h"
 #include "app_sleepmode.h"
+#include "usb_embeddings.h"
 
 UART_HandleTypeDef huart1;
 
@@ -135,6 +136,18 @@ if (XSPI_NOR_Map_Once() != 0) {
   if (System_DisplayAndTouch_Init() != 0) {
       Error_Handler();
   }
+
+
+  /* ------------------------------------------------------------
+   * SD Card / Embeddings Initialization
+   * ------------------------------------------------------------ */
+  printf("\r\n[MAIN] Initializing SD card...\r\n");
+
+  BSP_SD_Init(0);      // low-level SD init
+  MX_FATFS_Init();     // initialize FatFs stack
+  USB_SD_Test();       // mount + read embeddings files
+
+  printf("[MAIN] SD card check completed.\r\n\r\n");
 
 
   while (1) {

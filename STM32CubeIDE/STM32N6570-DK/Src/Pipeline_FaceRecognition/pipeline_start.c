@@ -9,17 +9,16 @@
 #include "stm32n6xx_hal.h"
 #include "FreeRTOS.h"
 #include "task.h"              // for vTaskDelay, pdMS_TO_TICKS
-#include "usb_embeddings.h"
+//#include "usb_embeddings.h"
 
 int FR_Rebuild_UserFace_Embeddings(void);
 
 void Pipeline_Start(void)
 {
 
-    /* Initialize SD card interface (required before detection) */
+    /* Initialize SD card interface (required before detection)
     BSP_SD_Init(0);
 
-    /* Check card presence */
     USB_SD_PrintStatus();
 
     while (1)
@@ -28,6 +27,7 @@ void Pipeline_Start(void)
         USB_SD_PrintStatus();
     }
 
+    */
 
     /* 0) (Already done in main_thread_fct): clocks, caches, HyperRAM, NOR mmap, NPURAM, etc. */
     /* 1) Boot-time embeddings from your pictures (prints to UART) */
