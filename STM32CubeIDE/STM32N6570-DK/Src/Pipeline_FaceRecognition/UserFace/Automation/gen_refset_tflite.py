@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, os, glob, pathlib, subprocess
+import argparse, os, glob, pathlib, subprocess, struct
 import numpy as np
 from PIL import Image
 import warnings
@@ -13,7 +13,7 @@ AES_KEY = bytes.fromhex("603DEB1015CA71BE2B73AEF0857D7781")  # 128-bit key
 AES_IV  = bytes.fromhex("000102030405060708090A0B0C0D0E0F")   # 16-byte IV
 
 def encrypt_bytes(data: bytes) -> bytes:
-    """Encrypt raw bytes using AES-CBC (no padding if already 16-byte aligned)."""
+    """Encrypt raw bytes using AES-CBC (PKCS7 only if not 16B aligned)."""
     print(f"[AES] Raw length: {len(data)} bytes")
     cipher = AES.new(AES_KEY, AES.MODE_CBC, AES_IV)
     if len(data) % 16 == 0:
@@ -106,53 +106,47 @@ def l2_normalize(v, eps=1e-9):
 
 
 # ==============================
-# C Code Generation with Encryption
+# BIN file emitter (per person)
 # ==============================
-def emit_c_struct(out_c, subject, vecs):
-    print(f"[CGEN] Writing encrypted C file → {out_c}")
-    dim = len(vecs[0])
-    safe_subject = subject.replace("-", "_").replace(" ", "_")
+# Binary layout per file:
+#   0:4    "FREB"
+#   4:6    uint16 version = 1
+#   6:8    uint16 name_len (bytes, UTF-8)
+#   8:10   uint16 emb_dim (floats before encryption)
+#   10:12  uint16 n_emb
+#   12:    name (name_len bytes, no NUL)
+#   repeat n_emb times:
+#     uint32 enc_len
+#     enc_len bytes ciphertext (AES-128-CBC, PKCS7 as needed)
+def emit_bin(out_bin, subject, vecs, encrypt_fn):
+    print(f"[CGEN] Writing BIN → {out_bin}")
+    name = subject.encode("utf-8")
+    name_len = len(name)
+    emb_dim = len(vecs[0])
+    n_emb = len(vecs)
 
-    with open(combined_path, "w", encoding="utf-8") as f:
-        f.write("/* Auto-generated merged reference set — DO NOT EDIT */\n")
-        f.write("#include <stddef.h>\n")
-        f.write("#include <stdint.h>\n")  # <-- Added to fix uint8_t type
-        f.write("#ifndef EMBREC_DEFINED\n#define EMBREC_DEFINED\n")
-        f.write("typedef struct { const char* name; const uint8_t* data; int dim; } EmbRec;\n")
-        f.write("#endif\n\n")
-
-
-        f.write(f"#define REF_NAME \"{subject}\"\n\n")
-
+    with open(out_bin, "wb") as f:
+        f.write(b"FREB")
+        f.write(struct.pack("<H", 1))           # version
+        f.write(struct.pack("<H", name_len))
+        f.write(struct.pack("<H", emb_dim))
+        f.write(struct.pack("<H", n_emb))
+        f.write(name)
         for i, v in enumerate(vecs):
-            raw = np.array(v, dtype=np.float32).tobytes()
+            raw = np.asarray(v, dtype=np.float32).tobytes()
             print(f"[CGEN] Encrypting embedding {i}: raw len={len(raw)}")
-            enc = encrypt_bytes(raw)
-            print(f"[CGEN] -> ciphertext len={len(enc)}")
-            f.write(f"static const uint8_t emb_{safe_subject}_{i}[] = {{\n  ")
-            for k, val in enumerate(enc):
-                sep = ", " if (k + 1) % 16 else ",\n  "
-                if k + 1 == len(enc):
-                    sep = "\n"
-                f.write(f"0x{val:02X}{sep}")
-            f.write("};\n\n")
-
-        f.write(f"const EmbRec g_ref_set_{safe_subject}[] = {{\n")
-        for i in range(len(vecs)):
-            f.write(f"  {{ REF_NAME, emb_{safe_subject}_{i}, FR_EMB_SIZE }},\n")
-        f.write("};\n")
-        f.write(f"const int g_ref_set_count_{safe_subject} = "
-                f"(int)(sizeof(g_ref_set_{safe_subject})/sizeof(g_ref_set_{safe_subject}[0]));\n\n")
-        f.write("#undef REF_NAME\n")
-
-    print(f"[CGEN] ✅ Finished writing {len(vecs)} embeddings to {out_c}")
+            enc = encrypt_fn(raw)
+            f.write(struct.pack("<I", len(enc)))
+            f.write(enc)
+            print(f"[CGEN] -> wrote enc_len={len(enc)}")
+    print(f"[CGEN] ✅ BIN written: {out_bin}  (emb_dim={emb_dim}, n_emb={n_emb})")
 
 
 # ==============================
 # Main Function
 # ==============================
 def main():
-    print("\n=== Face Embedding Encryption Tool ===")
+    print("\n=== Face Embedding Encryption Tool → BIN per person ===")
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="facenet_512_int_quant.tflite")
     ap.add_argument("--in_dir", default=".")
@@ -160,16 +154,17 @@ def main():
     ap.add_argument("--no_l2norm", action="store_true")
     ap.add_argument("--save_npz", action="store_true")
     ap.add_argument("--skip_auto", action="store_true")
+    ap.add_argument("--out_root", default="all_faces", help="Output root directory")
     args = ap.parse_args()
 
     root = os.path.dirname(os.path.abspath(__file__))
-    all_faces_root = os.path.join(root, "all_faces")
+    all_faces_root = os.path.join(root, args.out_root)
     os.makedirs(all_faces_root, exist_ok=True)
     person_dir = os.path.join(all_faces_root, args.subject)
     os.makedirs(person_dir, exist_ok=True)
 
     out_txt = os.path.join(person_dir, f"embeddings_{args.subject}.txt")
-    out_c = os.path.join(person_dir, f"embeddings_table_{args.subject}.c")
+    out_bin = os.path.join(person_dir, f"{args.subject}.bin")
     out_npz = os.path.join(person_dir, f"embeddings_{args.subject}.npz")
 
     print(f"[ARGS] Subject={args.subject}")
@@ -211,12 +206,15 @@ def main():
                        ",".join(f"{v:.6f}" for v in y.tolist()) + "\n")
             print(f"[PROC] OK {label}: dim={y.shape[0]} L2={np.linalg.norm(y):.3f}")
 
-    emit_c_struct(out_c, args.subject, vecs)
-    print(f"[DONE] Wrote:\n - {out_c}\n - {out_txt}")
+    # --- Emit BIN per person ---
+    emit_bin(out_bin, args.subject, vecs, encrypt_bytes)
+    print(f"[DONE] Wrote:\n - {out_bin}\n - {out_txt}")
+
     if args.save_npz:
         np.savez(out_npz, labels=np.array(labels),
                  embeddings=np.array(vecs, dtype=np.float32))
         print(f"[SAVE] NPZ saved: {out_npz}")
+
     return args.skip_auto
 
 
@@ -239,6 +237,7 @@ if __name__ == "__main__":
         root = os.path.dirname(os.path.abspath(__file__))
         model_path = os.path.join(root, "facenet_512_int_quant.tflite")
 
+        # consider each subfolder with images as a different subject
         subfolders = [
             f for f in os.listdir(root)
             if os.path.isdir(os.path.join(root, f))
@@ -250,7 +249,7 @@ if __name__ == "__main__":
 
         print(f"[AUTO] Found {len(subfolders)} people: {subfolders}\n")
         for name in subfolders:
-            print(f"[AUTO] Generating embeddings for {name} ...")
+            print(f"[AUTO] Generating BIN for {name} ...")
             cmd = [
                 os.sys.executable, __file__,
                 "--model", model_path,
@@ -260,35 +259,12 @@ if __name__ == "__main__":
             ]
             subprocess.run(cmd, check=True)
 
-        combined_path = os.path.join(root, "all_faces", "combined_refset.c")
-        print(f"\n[AUTO] Building {combined_path}")
-        with open(combined_path, "w", encoding="utf-8") as f:
-            f.write("/* Auto-generated merged reference set — DO NOT EDIT */\n")
-            f.write("#include <stddef.h>\n")
-            f.write("#ifndef EMBREC_DEFINED\n#define EMBREC_DEFINED\n")
-            f.write("typedef struct { const char* name; const uint8_t* data; int dim; } EmbRec;\n")
-            f.write("#endif\n\n")
-            for name in subfolders:
-                f.write(f"#include \"embeddings_table_{name}.c\"\n")
-
-            f.write("\nconst EmbRec* g_all_ref_sets[] = {\n")
-            for name in subfolders:
-                f.write(f"    g_ref_set_{name},\n")
-            f.write("};\n\nconst int g_all_ref_set_counts[] = {\n")
-            for name in subfolders:
-                f.write(f"    g_ref_set_count_{name},\n")
-            f.write("};\n\nstatic EmbRec g_ref_set_combined[512];\n")
-            f.write("static int g_ref_set_combined_count = 0;\n")
-            f.write("EmbRec* g_ref_set = g_ref_set_combined;\nint g_ref_set_count = 0;\n\n")
-            f.write("void FR_BuildCombinedRefset(void) {\n")
-            f.write("    g_ref_set_combined_count = 0;\n    g_ref_set_count = 0;\n")
-            f.write("    int total = sizeof(g_all_ref_set_counts)/sizeof(int);\n")
-            f.write("    for (int i = 0; i < total; i++) {\n")
-            f.write("        int cnt = g_all_ref_set_counts[i];\n")
-            f.write("        const EmbRec* sub = g_all_ref_sets[i];\n")
-            f.write("        for (int j = 0; j < cnt && g_ref_set_combined_count < 512; j++) {\n")
-            f.write("            g_ref_set_combined[g_ref_set_combined_count++] = sub[j];\n")
-            f.write("        }\n    }\n")
-            f.write("    g_ref_set = g_ref_set_combined;\n")
-            f.write("    g_ref_set_count = g_ref_set_combined_count;\n}\n")
-        print(f"[AUTO] ✅ Combined file written: {combined_path}\n")
+        # Optional: write a tiny manifest (directory listing) for your firmware
+        # The firmware doesn't need it, but it can help debugging.
+        all_faces_root = os.path.join(root, "all_faces")
+        manifest = os.path.join(all_faces_root, "manifest.txt")
+        bins = sorted(glob.glob(os.path.join(all_faces_root, "*", "*.bin")))
+        with open(manifest, "w", encoding="utf-8") as f:
+            for b in bins:
+                f.write(os.path.relpath(b, all_faces_root).replace("\\", "/") + "\n")
+        print(f"\n[AUTO] ✅ Manifest written: {manifest}")

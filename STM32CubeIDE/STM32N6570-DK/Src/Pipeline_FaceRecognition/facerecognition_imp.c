@@ -58,6 +58,7 @@
 #include "app_ui_pin.h"
 #include "app_ui_pin_face_rec.h"
 #include "crypto_utils.h"
+#include "refset_bin.h"   // new SD + AES loader
 
 /* If the generated header that declares these isn't included by your BSP,
  * keep these forward decls to avoid implicit-decl warnings. */
@@ -190,12 +191,13 @@ extern bqueue_t nn_output_queue;
 extern display_t disp;
 extern volatile char g_fr_overlay_label[32];
 
-/* ---- Reference set compiled in Generated/embeddings_table.c ---- */
-/* ---- Auto-generated combined reference set ---- */
-typedef struct { const char* name; const float* data; int dim; } EmbRec;
-extern EmbRec* g_ref_set;
-extern int     g_ref_set_count;
-extern void    FR_BuildCombinedRefset(void);
+
+/* ---- Reference set now handled dynamically via refset_bin.h ---- */
+// typedef struct { const char* name; const float* data; int dim; } EmbRec;
+// extern EmbRec* g_ref_set;
+// extern int     g_ref_set_count;
+// extern void    FR_BuildCombinedRefset(void);
+
 
 
 /* ---------------- helpers ---------------- */
@@ -466,14 +468,34 @@ void pp_thread_fct(void *arg)
     }
   }
 
-  FR_BuildCombinedRefset();
-  printf("[FR] Combined reference set built — total %d entries\r\n", g_ref_set_count);
 
-  /* [DELAYED DECRYPTION]
-   * Wait until hardware AES/SAES clocks are stable before starting CMOX AES.
-   * FreeRTOS delay ensures other init tasks complete first.
+
+  /* ---- Load encrypted reference set ---- */
+  FR_LoadRefsetFromSD_Bin("0:faces");
+  printf("[FR] Encrypted reference sets found: %d\r\n", g_ref_set_count);
+
+  /* Wait for AES clocks to settle (or cmox init) */
+  vTaskDelay(pdMS_TO_TICKS(2000));
+
+  printf("[FR] Decrypting embeddings...\r\n");
+  FR_DecryptAllRefsetOnce();
+  printf("[FR] Decryption complete — %d embeddings ready\r\n", g_ref_set_count);
+
+  /* ---- Quick debug of first entry (check SD parser output) ---- */
+  if (g_ref_set_count > 0)
+  {
+      printf("[FR][DBG] First entry: %s, dim=%d, first bytes: ",
+             g_ref_set[0].name, g_ref_set[0].dim);
+      for (int i = 0; i < 8 && i < g_ref_set[0].dim; ++i)
+    	  printf("%.4f ", g_ref_set[0].data[i]);
+      printf("\r\n");
+  }
+
+  /* ---- Delayed decryption ----
+   * Wait until hardware AES clocks are stable (2 s after boot)
+   * before starting software/hardware AES routines.
    */
-  vTaskDelay(pdMS_TO_TICKS(2000));  // 2 seconds delay after system start
+  vTaskDelay(pdMS_TO_TICKS(2000));  // 2 s delay after system start
 
   printf("[DEC] cmox initialized (delayed)\r\n");
   FR_DecryptAllRefsetOnce();   // 🔒 safe now
