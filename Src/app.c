@@ -30,7 +30,7 @@
  */
 
 #include "app.h"
-#include "network.h"   // <-- REQUIRED for the macros & default buffers layout
+#include "network.h"
 #include "stm32n6570_discovery_xspi.h"
 #include <math.h>
 #include <stdint.h>
