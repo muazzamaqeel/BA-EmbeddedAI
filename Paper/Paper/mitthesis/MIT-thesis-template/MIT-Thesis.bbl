@@ -1,0 +1,128 @@
+% $ biblatex auxiliary file $
+% $ biblatex bbl format version 3.3 $
+% Do not modify the above lines!
+%
+% This is an auxiliary file used by the 'biblatex' package.
+% This file may safely be deleted. It will be recreated by
+% biber as required.
+%
+\begingroup
+\makeatletter
+\@ifundefined{ver@biblatex.sty}
+  {\@latex@error
+     {Missing 'biblatex' package}
+     {The bibliography requires the 'biblatex' package.}
+      \aftergroup\endinput}
+  {}
+\endgroup
+
+
+\refsection{0}
+  \datalist[entry]{none/global//global/global/global}
+    \entry{Fong2015}{misc}{}{}
+      \name{author}{1}{}{%
+        {{hash=e414180d9053c44990c40af55181db2e}{%
+           family={Fong},
+           familyi={F\bibinitperiod},
+           given={Chamberlain},
+           giveni={C\bibinitperiod}}}%
+      }
+      \strng{namehash}{e414180d9053c44990c40af55181db2e}
+      \strng{fullhash}{e414180d9053c44990c40af55181db2e}
+      \strng{fullhashraw}{e414180d9053c44990c40af55181db2e}
+      \strng{bibnamehash}{e414180d9053c44990c40af55181db2e}
+      \strng{authorbibnamehash}{e414180d9053c44990c40af55181db2e}
+      \strng{authornamehash}{e414180d9053c44990c40af55181db2e}
+      \strng{authorfullhash}{e414180d9053c44990c40af55181db2e}
+      \strng{authorfullhashraw}{e414180d9053c44990c40af55181db2e}
+      \field{sortinit}{2}
+      \field{sortinithash}{8b555b3791beccb63322c22f3320aa9a}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{eprinttype}{arxiv}
+      \field{howpublished}{{\itshape ArXiv e-prints}}
+      \field{month}{9}
+      \field{title}{Analytical Methods for Squaring the Disc}
+      \field{year}{2015}
+      \verb{eprint}
+      \verb 1509.06344
+      \endverb
+    \endentry
+    \entry{sharpe1}{online}{}{}
+      \name{author}{1}{}{%
+        {{hash=e844f6e518a0758e12808c365c30be78}{%
+           family={Sharpe},
+           familyi={S\bibinitperiod},
+           given={Michael},
+           giveni={M\bibinitperiod}}}%
+      }
+      \list{organization}{1}{%
+        {Comprehensive \TeX{} Archive Network}%
+      }
+      \strng{namehash}{e844f6e518a0758e12808c365c30be78}
+      \strng{fullhash}{e844f6e518a0758e12808c365c30be78}
+      \strng{fullhashraw}{e844f6e518a0758e12808c365c30be78}
+      \strng{bibnamehash}{e844f6e518a0758e12808c365c30be78}
+      \strng{authorbibnamehash}{e844f6e518a0758e12808c365c30be78}
+      \strng{authornamehash}{e844f6e518a0758e12808c365c30be78}
+      \strng{authorfullhash}{e844f6e518a0758e12808c365c30be78}
+      \strng{authorfullhashraw}{e844f6e518a0758e12808c365c30be78}
+      \field{sortinit}{2}
+      \field{sortinithash}{8b555b3791beccb63322c22f3320aa9a}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{month}{3}
+      \field{title}{New {TX} Font Package}
+      \field{urlday}{29}
+      \field{urlmonth}{5}
+      \field{urlyear}{2023}
+      \field{version}{1.71}
+      \field{year}{2022}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://ctan.org/pkg/newtx
+      \endverb
+      \verb{url}
+      \verb https://ctan.org/pkg/newtx
+      \endverb
+    \endentry
+    \entry{baehr1998}{book}{}{}
+      \name{author}{2}{}{%
+        {{hash=98011250085d049192a50fde77a955bc}{%
+           family={Baehr},
+           familyi={B\bibinitperiod},
+           given={H.\bibnamedelimi D.},
+           giveni={H\bibinitperiod\bibinitdelim D\bibinitperiod}}}%
+        {{hash=821cd6feec90b29f439c1b522473a393}{%
+           family={Stephan},
+           familyi={S\bibinitperiod},
+           given={K.},
+           giveni={K\bibinitperiod}}}%
+      }
+      \list{location}{1}{%
+        {Berlin}%
+      }
+      \list{publisher}{1}{%
+        {Springer-Verlag}%
+      }
+      \strng{namehash}{f62de93e8de86e6012acf6d97c26111b}
+      \strng{fullhash}{f62de93e8de86e6012acf6d97c26111b}
+      \strng{fullhashraw}{f62de93e8de86e6012acf6d97c26111b}
+      \strng{bibnamehash}{f62de93e8de86e6012acf6d97c26111b}
+      \strng{authorbibnamehash}{f62de93e8de86e6012acf6d97c26111b}
+      \strng{authornamehash}{f62de93e8de86e6012acf6d97c26111b}
+      \strng{authorfullhash}{f62de93e8de86e6012acf6d97c26111b}
+      \strng{authorfullhashraw}{f62de93e8de86e6012acf6d97c26111b}
+      \field{sortinit}{3}
+      \field{sortinithash}{ad6fe7482ffbd7b9f99c9e8b5dccd3d7}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{isbn}{3-540-63695-1}
+      \field{title}{Heat and Mass Transfer}
+      \field{year}{1998}
+    \endentry
+  \enddatalist
+  \missing{um3300}
+\endrefsection
+\endinput
+

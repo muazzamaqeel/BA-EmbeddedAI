@@ -1,0 +1,188 @@
+\chapter{Methodology}
+\setlength{\parindent}{0pt}
+\section{Requirements}
+
+
+The system is intended to be part of a door entry system that needs to be up and running 24 hours a day, 7 days a week. The goal is to achieve reliable face detection and recognition in real time while maintaining ultra-low power consumption suitable for continuous operation.
+
+The STM32N6570-DK board, featuring an Arm® Cortex®-M55 processor and Neural Processing Unit (NPU) accelerator, provides a powerful yet energy-efficient platform for deploying AI workloads at the edge. The system must be capable of capturing camera input, performing on-device inference for both face detection and face recognition, and controlling access mechanisms such as door locks or authentication signals all without relying on external computing resources.
+
+\subsection*{System Requirements}
+
+The system requirements were derived from the user and developer stories defined during the project. These requirements summarize the functional and non-functional aspects of the face recognition system and provide a clear foundation for implementation and validation.
+
+
+
+
+
+
+\subsection*{Functional Requirements}
+
+\textbf{Graphical User Interface with Two-Step Authentication}\\
+A user interface provides the primary interaction between the user and the embedded system. It must be intuitive, visually responsive, and clearly structured despite limited hardware resources. The system integrates a graphical home interface that allows seamless navigation between the main face recognition mode and the administrative mode. After successful recognition, a secure PIN interface is displayed to enable a two-step authentication process, enhancing both usability and security for daily access operations.
+
+\vspace{0.5em}
+\textbf{Fast and Efficient Recognition}\\
+For a smooth user experience, real-time inference. The system performs both face detection and recognition locally on the STM32N6570-DK using the Neural Processing Unit (NPU) for acceleration. This ensures that recognition is achieved in less than two seconds per user, providing quick and reliable access without dependency on external servers or network connections.
+
+\vspace{0.5em}
+\textbf{PIN and Multi-User Management}\\
+To support multiple authorized users, the system incorporates a secure PIN management feature within the administrative interface. Users can change their personal PINs directly on the device, ensuring confidentiality and flexibility. Furthermore, the system supports enrollment of multiple faces through an external configuration process, allowing easy management of user credentials in shared access scenarios.
+
+\vspace{0.5em}
+\textbf{Power-Saving Sleep Mode}\\
+Because the system operates continuously, minimizing idle power consumption is critical for long-term reliability. A dedicated sleep mode automatically activates after a defined period of inactivity, reducing system power draw. The board wakes instantly upon touch, ensuring responsiveness while maintaining ultra-low power operation suitable for embedded edge devices.
+
+\vspace{0.5em}
+\textbf{External Flash Management and Automation}\\
+External NOR flash memory is utilized for storing high-capacity assets such as user interface bitmaps, neural network weights, and firmware binaries. To simplify deployment and avoid manual flashing errors, a set of automated PowerShell scripts has to be developed. These tools allow efficient reading, analysis, and flashing of data to predefined memory regions, ensuring consistency and reproducibility across multiple hardware units.
+
+\vspace{0.5em}
+\textbf{Debug and Performance Monitoring}\\
+Comprehensive debugging and performance monitoring are vital for maintaining real-time reliability and optimizing system throughput. The implementation includes a UART-based logging interface that provides continuous runtime feedback for developers. Performance metrics, such as inference timing and system temperature, are monitored during execution to evaluate efficiency and hardware utilization.
+
+\vspace{0.5em}
+\textbf{On-Device Face Embedding Encryption}\\
+Since biometric data is highly sensitive, all stored face embeddings are encrypted using the AES-CBC algorithm to prevent unauthorized access or data extraction. Decryption and verification occur entirely on the device without cloud connectivity, ensuring that user privacy is fully preserved. This approach enhances security while maintaining fast local authentication performance.
+
+\vspace{1em}
+
+
+\subsection*{Developer Requirements}
+
+\textbf{External Flash Management and Automation}\\
+To manage large external assets such as images and AI model binaries, the system incorporates automated tools for reading, flashing, and verification of NOR flash memory. This process is executed through dedicated PowerShell scripts, reducing manual work and ensuring that each build deployment remains consistent across all development environments.
+
+\vspace{0.5em}
+\textbf{Debug and Performance Monitoring}\\
+During the development phase, visibility into real-time operations is crucial for troubleshooting and optimization. The system provides detailed UART-based debug output that logs critical events, such as frame rates, recognition timings, and power states. These logs help developers identify performance bottlenecks and ensure the NPU is effectively utilized for accelerated inference tasks.
+
+\vspace{0.5em}
+\textbf{Modular Code Architecture}\\
+A modular architecture allows independent development, testing, and maintenance of system components. The codebase is divided into clearly defined modules for the graphical interface, AI inference, cryptography, and system control. This separation reduces code dependencies, improves scalability, and simplifies the integration of new features or future hardware upgrades.
+
+
+
+
+
+\begin{table}[H]
+	\centering
+	\caption{Functional and Developer Requirements for the Face Recognition System}
+	\label{tab:functional_developer_requirements}
+	\renewcommand{\arraystretch}{1.2} % increase row height slightly
+	\begin{tabularx}{0.95\textwidth}{>{\centering\arraybackslash}p{0.08\textwidth} X}
+		\toprule
+		\textbf{No.} & \textbf{Requirement} \\
+		\midrule
+		1 & Graphical User Interface with Two-Step Authentication \\
+		2 & Fast and Efficient Recognition \\
+		3 & PIN and Multi-User Management \\
+		4 & Power-Saving Sleep Mode \\
+		5 & External Flash Management and Automation \\
+		6 & Debug and Performance Monitoring \\
+		7 & On-Device Face Embedding Encryption \\
+		8 & Developer Flash Management Automation \\
+		9 & Developer Debug and Performance Monitoring \\
+		10 & Modular Code Architecture for Scalability \\
+		\bottomrule
+	\end{tabularx}
+\end{table}
+
+
+
+
+
+\section{Concept and Design}
+\subsection{Graphical User Interface}
+
+\textbf{TouchGFX}\\
+TouchGFX is a high-level graphical framework developed and officially maintained by STMicroelectronics, specifically designed for STM32 microcontrollers. It integrates tightly with STM32CubeIDE and provides a visual design environment, enabling developers to create complex user interfaces using a drag-and-drop editor rather than direct hardware programming. The framework automatically generates underlying C++ code for screen transitions, animations, widgets, and event handling. This allows for rapid prototyping and shortens the overall development cycle, especially for applications that prioritize aesthetics and ease of development over low-level control.
+
+From a debugging and performance perspective, TouchGFX includes several mechanisms intended to monitor graphical behavior at the application layer. The TouchGFX Designer offers a simulation environment that runs entirely on a host PC, allowing developers to test logic flow, button events, and visual transitions without deploying to the physical STM32 board. The integrated \texttt{Frame Statistics} feature displays metrics such as average frame rate (FPS), rendering time, and redraw frequency. Additionally, when running on STM32 hardware, TouchGFX can output limited runtime performance data through UART or ITM tracing, providing insight into the number of drawn widgets and frame update duration.
+
+However, these diagnostic tools operate exclusively at the framework level. They abstract away the intricate low-level processes that occur within the STM32N6570-DK display pipeline—namely, LTDC (LCD-TFT Display Controller) timing synchronization, DMA2D (Chrom-ART) acceleration, and external NOR flash memory transfers. As a result, while developers can observe high-level rendering performance, they cannot directly monitor how efficiently LTDC fetches frame buffer data, whether DMA2D transactions overlap with AI inference operations, or how external memory bandwidth impacts redraw latency. These aspects remain hidden under TouchGFX’s internal rendering scheduler, which manages its own framebuffer swapping and DMA usage.
+
+Moreover, TouchGFX relies on an internal task model that may not align perfectly with FreeRTOS scheduling. The framework executes its rendering pipeline within a single high-priority task that frequently blocks on frame updates, potentially preempting lower-priority tasks such as AI inference, camera acquisition, or communication services. Since the scheduler is abstracted, developers cannot easily profile or modify these behaviors. Integration with STM32CubeMonitor or SEGGER SystemView is possible only to a limited extent, as TouchGFX controls most timing-critical operations internally. This makes it challenging to perform precise cycle-level measurements or determine the true latency between a GUI event trigger and its on-screen response.
+
+Another major limitation arises in memory and bus-level performance tracing. TouchGFX’s hardware abstraction layer (HAL) manages frame buffers, DMA2D configuration, and cache maintenance routines internally. Consequently, developers cannot insert custom debug hooks into DMA2D start or completion interrupts, nor can they instrument LTDC vertical blanking interrupts to analyze refresh jitter. This lack of transparency prevents the identification of bottlenecks such as:
+\begin{itemize}
+	\item Latency caused by DMA2D contention with the Neural Processing Unit (NPU) during concurrent operations.
+	\item External NOR flash read delays when streaming bitmaps larger than on-chip SRAM capacity.
+	\item Missed LTDC synchronization pulses leading to partial or torn frame updates.
+\end{itemize}
+
+Furthermore, TouchGFX performs internal double buffering and partial redraws to manage screen transitions and animations. While this improves perceived fluidity, it also introduces indeterminate frame timing that varies based on widget complexity and screen composition. Developers have no direct access to frame buffer boundaries or render queue timing, making deterministic analysis nearly impossible. When used in conjunction with real-time AI inference and power management tasks, this unpredictable rendering behavior can lead to frame skips or temporary freezes, especially under high CPU or memory bus load.
+
+From a system integration standpoint, TouchGFX assumes near-exclusive control of the display subsystem. It continuously updates the frame buffer even during periods when no screen change is required, increasing DMA2D and LTDC activity and thereby raising overall system power consumption. Attempts to throttle or synchronize rendering based on system state (e.g., during AI inference or low-power sleep preparation) require intrusive modification of the generated code and risk breaking framework compatibility. Moreover, because TouchGFX manages its own heap allocations for widget creation, debugging memory fragmentation or heap exhaustion becomes difficult without access to the framework’s internal allocation logic.
+
+In summary, while TouchGFX offers a polished development experience and accelerates GUI creation, it inherently limits the developer’s ability to perform low-level debugging and performance optimization. The abstraction layers that simplify UI design simultaneously obscure the underlying display pipeline, preventing precise timing control and hardware-level diagnostics. For an embedded AI system such as the STM32N6570-DK face recognition project—where deterministic latency, synchronized task execution, and minimal resource overhead are critical—these limitations render TouchGFX unsuitable. In contrast, a custom GUI framework written entirely in C provides full transparency, direct access to LTDC and DMA2D registers, cycle-accurate timing measurement, and tight integration with FreeRTOS tasks—making it vastly superior for achieving real-time reliability, power efficiency, and hardware-aware debugging.
+
+
+
+
+\vspace{0.8em}
+\textbf{Light and Versatile Graphics Library}\\
+The \textbf{Light and Versatile Graphics Library (LVGL)} represents a popular open-source alternative to proprietary GUI frameworks such as TouchGFX. It is widely used in embedded environments for its portability, modularity, and relatively low memory footprint. Unlike TouchGFX, LVGL does not depend on code generators or proprietary editors; instead, it provides a flexible C API and configuration system that can be tailored to the available hardware resources. This makes it particularly attractive for developers who require moderate customizability without fully re-implementing rendering logic.
+
+From a debugging and performance-monitoring standpoint, LVGL offers several built-in mechanisms to observe runtime behavior. It maintains internal counters for frame times, buffer flushing frequency, memory allocation, and task load, which can be visualized directly on the target device through its optional \texttt{LV\_USE\_DEBUG} and \texttt{LV\_USE\_PERF\_MONITOR} configuration flags. Developers can also integrate LVGL with external trace tools such as SEGGER SystemView or Percepio Tracealyzer to capture FreeRTOS task execution statistics, including the time spent in the GUI task, refresh intervals, and blocking events. Furthermore, LVGL’s modular driver architecture allows insertion of custom hooks within the display, input, or rendering layers for partial transparency into lower-level processes.
+
+However, despite these advantages, LVGL’s performance analysis remains largely indirect. The library’s architecture follows a high-level event-driven model that abstracts the underlying display hardware behind multiple driver layers. The main GUI task executes periodically through the \texttt{lv\_timer\_handler()} function, which handles all screen refreshes, animations, and input updates in a single loop. This periodic scheduling simplifies timing management but also introduces additional CPU overhead and makes deterministic profiling difficult. Developers can measure how long a full frame takes to render, yet cannot directly trace when DMA2D operations overlap with LTDC refreshes or how external NOR flash access delays affect draw operations unless they manually instrument the display driver callbacks.  
+
+Another challenge stems from LVGL’s reliance on multiple buffering mechanisms. Depending on configuration, the library may use full-screen double buffering or smaller “draw buffers” that DMA2D repeatedly flushes to the frame buffer. While this allows memory optimization, it complicates precise performance tracking: the exact timing of DMA2D transactions, cache invalidations, and LTDC synchronization pulses becomes obscured by the intermediate software buffering layer. This opacity makes it difficult to guarantee that GUI rendering will remain stable during concurrent hardware activity such as NPU inference, camera streaming, or encryption tasks.
+
+In high-performance embedded AI systems such as the STM32N6570-DK face recognition platform, such abstraction can become a bottleneck. The periodic handler continues to trigger background redraws even when the display content remains static, consuming additional CPU cycles and DMA bandwidth. When multiple peripherals share the system bus, this can lead to unpredictable frame-time spikes, especially when NOR flash or external SDRAM are accessed simultaneously by other tasks. Although developers can mitigate this behavior by reducing the update frequency or disabling animations, it still introduces variability that conflicts with the deterministic requirements of real-time AI-driven applications.
+
+From a debugging integration perspective, LVGL does allow moderate visibility through its log subsystem, which can output categorized messages (e.g., render, input, memory) over UART or RTT. Yet this still operates at the software level and does not expose hardware-specific events such as LTDC underruns or DMA completion interrupts. Developers seeking to trace low-level timing events must implement separate monitoring routines outside LVGL’s ecosystem, leading to fragmented instrumentation and greater system complexity.
+
+In conclusion, LVGL provides an excellent balance between abstraction and efficiency for conventional embedded GUI design, and its open-source nature encourages customization and debugging flexibility. Nevertheless, its event-driven model, buffered rendering pipeline, and partial separation from hardware prevent the cycle-accurate profiling and deterministic scheduling demanded by AI-integrated systems. While LVGL’s performance monitoring is sufficient for general applications, it cannot offer the real-time precision or hardware synchronization required on the STM32N6570-DK platform.
+
+\vspace{0.8em}
+\textbf{Fully Custom GUI Framework}\\
+To overcome these constraints, this project implements a \textbf{fully custom GUI framework} developed entirely in C, engineered specifically for the STM32N6570-DK hardware and FreeRTOS operating environment. The framework provides complete transparency and control over all graphical operations from individual pixel drawing to full-screen refreshes—allowing deterministic timing and seamless integration with concurrent AI inference and power-management tasks. Every component of the display pipeline, including LTDC initialization, DMA2D acceleration, external NOR flash access, and input handling, is explicitly defined in code rather than hidden behind abstraction layers.
+
+From a debugging perspective, this design enables unrestricted access to hardware registers, interrupts, and performance counters. Developers can insert instrumentation points throughout the rendering process, leveraging the DWT (Data Watchpoint and Trace) cycle counter and TIM2 timer to measure draw call durations, DMA2D transfer latency, and LTDC refresh intervals with microsecond accuracy. Each metric can be streamed via UART or stored in RAM for offline profiling, providing complete visibility into system timing behavior. This level of introspection allows real-time identification of performance bottlenecks—for instance, verifying whether DMA2D transfer contention overlaps with NPU operations or determining the precise duration of flash bitmap reads.
+
+The framework also integrates directly with FreeRTOS task instrumentation. Since GUI operations run in dedicated threads, developers can visualize task scheduling, stack usage, and context-switch timing through STM32CubeIDE’s FreeRTOS awareness or SEGGER SystemView. This unified approach ensures that rendering performance can be analyzed alongside other system tasks, enabling cycle-accurate synchronization between the user interface, AI inference, and power-state management.
+
+Unlike third-party frameworks, this custom implementation avoids hidden buffering, garbage collection, or deferred rendering. Every bitmap draw, rectangle fill, and text update occurs through deterministic routines such as \texttt{UTIL\_LCD\_DrawBitmap()}, \texttt{UTIL\_LCD\_FillRect()}, and custom DMA2D functions. Since all graphical assets reside in predefined NOR flash addresses, the memory footprint is fully predictable and independent of dynamic heap allocations. This eliminates fragmentation, simplifies debugging of memory access patterns, and ensures real-time reliability even under sustained load.
+
+An additional advantage is the ability to implement in-line hardware diagnostics. During development, the GUI can overlay live debug data directly on the display—such as frame rate, task load, memory usage, and DMA status—rendered in a semi-transparent layer during the LTDC vertical blanking interval. This immediate visual feedback enables developers to tune performance parameters on-device without halting the system. Similarly, the framework allows controlled halting of specific tasks for freeze-frame analysis, an invaluable capability when investigating timing issues in multi-threaded environments.
+
+The direct-hardware approach further allows adaptive optimization strategies: for example, DMA2D activity can be dynamically throttled when AI inference tasks saturate the bus, or GUI refresh can be suspended during low-power sleep transitions to conserve energy. These techniques are only feasible when developers maintain full command over hardware scheduling and synchronization, something unattainable within the fixed execution models of TouchGFX or LVGL.
+
+In practical terms, the custom GUI framework achieves:
+\begin{itemize}
+	\item \textbf{Complete transparency:} Every stage of the rendering pipeline—from flash read to LTDC output—is observable and controllable, ensuring accurate debugging and predictable timing.
+	\item \textbf{Deterministic performance:} Static allocation, absence of abstraction layers, and precise control over DMA/LTDC synchronization eliminate jitter and frame-time variability.
+	\item \textbf{Seamless system integration:} Direct coupling with FreeRTOS and AI tasks enables unified performance profiling across CPU, NPU, and display subsystems.
+	\item \textbf{Hardware-level diagnostics:} Developers can directly monitor registers, trace interrupts, and log microsecond-level event timings, ensuring complete visibility into low-level behavior.
+\end{itemize}
+
+Ultimately, this approach transforms the GUI subsystem from a black box into a fully traceable, deterministic component of the overall embedded architecture. By combining low-level control, real-time instrumentation, and minimal runtime overhead, the custom GUI framework achieves a level of debugging precision and performance consistency unattainable with high-level frameworks. This tight hardware–software integration is essential for maintaining the responsiveness, reliability, and energy efficiency required by an always-on AI-based face recognition system operating on a resource-constrained STM32N6570-DK microcontroller.
+
+\bigskip
+\noindent\textit{In summary, while TouchGFX offers ease of development and LVGL provides flexible modularity, both frameworks introduce abstraction layers that obscure low-level performance characteristics. The fully custom GUI, by contrast, delivers complete hardware transparency, cycle-accurate timing analysis, and deterministic integration with the AI pipeline—making it the most suitable and efficient solution for real-time embedded intelligence on the STM32N6570-DK.}
+
+
+
+
+
+
+
+
+\subsection{Face Detection and Recognition}
+\subsection{Power Consumption}
+\subsection{Cryptography}
+
+
+
+
+\section{System and Software Design}
+\subsection{System Design}
+\subsection{Software Design}
+
+
+Peripheral clocks were dynamically scaled. Face detection triggered wake-ups from STOP2 mode, ensuring responsiveness with minimal idle power.
+
+\section*{Nomenclature for Chapter 3}
+$T$ – Inf

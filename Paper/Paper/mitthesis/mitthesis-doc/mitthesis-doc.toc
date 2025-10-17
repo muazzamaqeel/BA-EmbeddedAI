@@ -1,0 +1,25 @@
+\contentsline {section}{\numberline {1}BACKGROUND}{2}{section.1}%
+\contentsline {section}{\numberline {2}SYSTEM REQUIREMENTS AND INSTALLATION}{2}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Downloading the template}{2}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}File structure}{2}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}\LaTeX \ engine}{3}{subsection.2.3}%
+\contentsline {subsection}{\numberline {2.4}PDF/A compliance}{3}{subsection.2.4}%
+\contentsline {section}{\numberline {3}SETTING UP TITLE PAGE, ABSTRACT, AND BIBLIOGRAPHY}{3}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Copyright license}{4}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Bibliography}{4}{subsection.3.2}%
+\contentsline {section}{\numberline {4}CLASS OPTIONS}{4}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Font loading}{4}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Design options}{5}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Single-sided vs.\ double-sided layout}{6}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Additional commands}{6}{subsection.4.4}%
+\contentsline {subsection}{\numberline {4.5}Nomenclature}{6}{subsection.4.5}%
+\contentsline {section}{Nomenclature for Chapter 1}{7}{section*.11}%
+\contentsline {section}{\numberline {5}PACKAGES FOR MATH, CHEMISTRY, CODE, TABLES, AND MORE}{7}{section.5}%
+\contentsline {section}{\numberline {6}TROUBLESHOOTING AND MODIFICATIONS}{9}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Listing thesis committee members or using a signature page}{9}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Dealing with multiple titles in the signature block}{9}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Overflowing title page: managing space}{9}{subsection.6.3}%
+\contentsline {subsection}{\numberline {6.4}Push title page text toward top}{9}{subsection.6.4}%
+\contentsline {subsection}{\numberline {6.5}Changing paragraph separation}{10}{subsection.6.5}%
+\contentsline {subsection}{\numberline {6.6}Use outside MIT}{10}{subsection.6.6}%
+\contentsline {section}{\numberline {7}RESOURCES FOR LATEX}{10}{section.7}%

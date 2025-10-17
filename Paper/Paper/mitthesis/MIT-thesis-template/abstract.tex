@@ -1,0 +1,19 @@
+% From mitthesis package
+% Version: 1.01, 2023/06/19
+% Documentation: https://ctan.org/pkg/mitthesis
+%
+% The abstract environment creates all the required headers and footnote. 
+% You only need to add the text of the abstract itself.
+%
+% Approximately 500 words or less; try not to use formulas or special characters
+% If you don't want an initial indentation, do \noindent at the start of the abstract
+
+Face recognition has become a key enabler for modern access control systems, but most existing solutions rely on high-performance processors such as Raspberry Pi or GPU-accelerated devices. While effective, these platforms are not designed for continuous 24/7 operation under strict power constraints, making them unsuitable for low-power embedded applications such as battery-powered or energy-constrained door entry systems.  
+
+This thesis investigates the development of an AI-based face recognition system implemented on the STM32N6570 Discovery Kit, a microcontroller platform featuring an Arm Cortex-M55 core and a dedicated Neural-ART accelerator \cite{um3300}. The work focuses on adapting and optimizing a Python-based prototype into a fully embedded C/C++ application capable of running efficiently on the STM32 platform. The research covers multiple aspects: porting neural networks to the ST AI toolchain, designing a low-power runtime pipeline with sleep mode support, and integrating cryptographic functions to ensure secure storage and transmission of biometric data.  
+
+A comprehensive evaluation was conducted to compare the STM32N6570 implementation against the original Raspberry Pi-based prototype. Power consumption was measured across different operational states, including inference, idle, and deep sleep, using the board’s built-in current measurement interfaces. Additional experiments examined the trade-off between inference accuracy and energy efficiency when deploying quantized neural networks.  
+
+The results demonstrate that low-power microcontrollers with AI accelerators can successfully perform real-time face recognition while significantly reducing energy consumption compared to Raspberry Pi systems. Furthermore, by integrating motion detection for conditional wake-up and hardware-accelerated cryptography, the system achieves both efficiency and robustness for long-term deployment.  
+
+This thesis shows that modern embedded AI platforms, such as the STM32N6 series, are viable candidates for practical biometric recognition applications where energy efficiency and security are critical. The findings contribute to the growing field of edge AI, where intelligent processing moves closer to sensors, enabling new classes of low-power smart devices.  
