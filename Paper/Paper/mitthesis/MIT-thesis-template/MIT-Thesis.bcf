@@ -2397,11 +2397,6 @@
     <bcf:datasource type="file" datatype="bibtex" glob="false">mitthesis-sample.bib</bcf:datasource>
   </bcf:bibdata>
   <bcf:section number="0">
-    <bcf:citekey order="1" intorder="1">um3300</bcf:citekey>
-    <bcf:citekey order="2" intorder="1">Fong2015</bcf:citekey>
-    <bcf:citekey order="2" intorder="2">sharpe1</bcf:citekey>
-    <bcf:citekey order="3" intorder="1">baehr1998</bcf:citekey>
-    <bcf:citekey order="4" intorder="1">baehr1998</bcf:citekey>
   </bcf:section>
   <!-- SORTING TEMPLATES -->
   <bcf:sortingtemplate name="none">

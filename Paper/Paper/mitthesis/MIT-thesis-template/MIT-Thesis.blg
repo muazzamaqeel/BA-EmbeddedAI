@@ -1,17 +1,15 @@
 [0] Config.pm:328> INFO - This is Biber 2.21
 [0] Config.pm:331> INFO - Logfile is 'MIT-Thesis.blg'
-[163] biber-MSWIN64:342> INFO - === 
-[218] Biber.pm:421> INFO - Reading 'MIT-Thesis.bcf'
-[376] Biber.pm:1002> INFO - Found 4 citekeys in bib section 0
-[400] Biber.pm:4487> INFO - Processing section 0
-[418] Biber.pm:4678> INFO - Looking for bibtex file 'mitthesis-sample.bib' for section 0
-[486] bibtex.pm:1713> INFO - LaTeX decoding ...
-[521] bibtex.pm:1519> INFO - Found BibTeX data source 'mitthesis-sample.bib'
-[604] UCollate.pm:68> INFO - Overriding locale 'en-US' defaults 'variable = shifted' with 'variable = non-ignorable'
-[604] UCollate.pm:68> INFO - Overriding locale 'en-US' defaults 'normalization = NFD' with 'normalization = prenormalized'
-[604] Biber.pm:4307> INFO - Sorting list 'none/global//global/global/global' of type 'entry' with template 'none' and locale 'en-US'
-[604] Biber.pm:4313> INFO - No sort tailoring available for locale 'en-US'
-[612] bbl.pm:676> INFO - Writing 'MIT-Thesis.bbl' with encoding 'UTF-8'
-[615] bbl.pm:779> INFO - Output to MIT-Thesis.bbl
-[616] Biber.pm:132> WARN - I didn't find a database entry for 'um3300' (section 0)
-[616] Biber.pm:134> INFO - WARNINGS: 1
+[144] biber-MSWIN64:342> INFO - === 
+[193] Biber.pm:421> INFO - Reading 'MIT-Thesis.bcf'
+[351] Biber.pm:1002> INFO - Found 1 citekeys in bib section 0
+[372] Biber.pm:4487> INFO - Processing section 0
+[389] Biber.pm:4678> INFO - Looking for bibtex file 'mitthesis-sample.bib' for section 0
+[446] bibtex.pm:1713> INFO - LaTeX decoding ...
+[454] bibtex.pm:1519> INFO - Found BibTeX data source 'mitthesis-sample.bib'
+[507] UCollate.pm:68> INFO - Overriding locale 'en-US' defaults 'normalization = NFD' with 'normalization = prenormalized'
+[507] UCollate.pm:68> INFO - Overriding locale 'en-US' defaults 'variable = shifted' with 'variable = non-ignorable'
+[507] Biber.pm:4307> INFO - Sorting list 'none/global//global/global/global' of type 'entry' with template 'none' and locale 'en-US'
+[507] Biber.pm:4313> INFO - No sort tailoring available for locale 'en-US'
+[516] bbl.pm:676> INFO - Writing 'MIT-Thesis.bbl' with encoding 'UTF-8'
+[518] bbl.pm:779> INFO - Output to MIT-Thesis.bbl
