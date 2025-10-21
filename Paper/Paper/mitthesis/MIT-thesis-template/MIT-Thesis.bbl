@@ -19,6 +19,128 @@
 
 \refsection{0}
   \datalist[entry]{none/global//global/global/global}
+    \entry{mazloum2019embedded}{book}{}{}
+      \name{author}{2}{}{%
+        {{hash=57d3a586b905eafcaa6d316b1108f27f}{%
+           family={Mazloum},
+           familyi={M\bibinitperiod},
+           given={Said},
+           giveni={S\bibinitperiod}}}%
+        {{hash=cc76492de1defbd642985e1f7c1f59b1}{%
+           family={Arabi},
+           familyi={A\bibinitperiod},
+           given={Khaled},
+           giveni={K\bibinitperiod}}}%
+      }
+      \list{location}{1}{%
+        {Cham, Switzerland}%
+      }
+      \list{publisher}{1}{%
+        {Springer}%
+      }
+      \strng{namehash}{055d73fed3f2066b30f4b9614b25da36}
+      \strng{fullhash}{055d73fed3f2066b30f4b9614b25da36}
+      \strng{fullhashraw}{055d73fed3f2066b30f4b9614b25da36}
+      \strng{bibnamehash}{055d73fed3f2066b30f4b9614b25da36}
+      \strng{authorbibnamehash}{055d73fed3f2066b30f4b9614b25da36}
+      \strng{authornamehash}{055d73fed3f2066b30f4b9614b25da36}
+      \strng{authorfullhash}{055d73fed3f2066b30f4b9614b25da36}
+      \strng{authorfullhashraw}{055d73fed3f2066b30f4b9614b25da36}
+      \field{sortinit}{1}
+      \field{sortinithash}{4f6aaa89bab872aa0999fec09ff8e98a}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{title}{Embedded Systems Design using the Finite State Machine Methodology}
+      \field{year}{2019}
+      \verb{doi}
+      \verb 10.1007/978-3-030-15305-0
+      \endverb
+    \endentry
+    \entry{balasubramanian2017fsm}{article}{}{}
+      \name{author}{2}{}{%
+        {{hash=a4b6cd77c21817b1c1814a0b8c675ad0}{%
+           family={Balasubramanian},
+           familyi={B\bibinitperiod},
+           given={M.},
+           giveni={M\bibinitperiod}}}%
+        {{hash=0c38020e581ed547f3db0eea9c5905b0}{%
+           family={Arulmozhiyal},
+           familyi={A\bibinitperiod},
+           given={R.},
+           giveni={R\bibinitperiod}}}%
+      }
+      \strng{namehash}{a11e5e467cac7e3bb6f6887f78899351}
+      \strng{fullhash}{a11e5e467cac7e3bb6f6887f78899351}
+      \strng{fullhashraw}{a11e5e467cac7e3bb6f6887f78899351}
+      \strng{bibnamehash}{a11e5e467cac7e3bb6f6887f78899351}
+      \strng{authorbibnamehash}{a11e5e467cac7e3bb6f6887f78899351}
+      \strng{authornamehash}{a11e5e467cac7e3bb6f6887f78899351}
+      \strng{authorfullhash}{a11e5e467cac7e3bb6f6887f78899351}
+      \strng{authorfullhashraw}{a11e5e467cac7e3bb6f6887f78899351}
+      \field{sortinit}{1}
+      \field{sortinithash}{4f6aaa89bab872aa0999fec09ff8e98a}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{issn}{2278-1323}
+      \field{journaltitle}{International Journal of Advanced Research in Computer Engineering and Technology (IJARCET)}
+      \field{note}{Accessed October 17, 2025}
+      \field{number}{2}
+      \field{title}{Design and Implementation of Finite State Machines in Embedded System Applications}
+      \field{urlday}{17}
+      \field{urlmonth}{10}
+      \field{urlyear}{2025}
+      \field{volume}{6}
+      \field{year}{2017}
+      \field{urldateera}{ce}
+      \field{pages}{169\bibrangedash 174}
+      \range{pages}{6}
+      \verb{urlraw}
+      \verb https://ijarcet.org/wp-content/uploads/IJARCET-VOL-6-ISSUE-2-169-174.pdf
+      \endverb
+      \verb{url}
+      \verb https://ijarcet.org/wp-content/uploads/IJARCET-VOL-6-ISSUE-2-169-174.pdf
+      \endverb
+    \endentry
+    \entry{morabito2018statecharts}{article}{}{}
+      \name{author}{3}{}{%
+        {{hash=3cffdbe02d8fb5c9cc7298d5de48ab64}{%
+           family={Morabito},
+           familyi={M\bibinitperiod},
+           given={Francesco\bibnamedelima C.},
+           giveni={F\bibinitperiod\bibinitdelim C\bibinitperiod}}}%
+        {{hash=2ff8566dd1544146261dcee95879fc4d}{%
+           family={Rovetto},
+           familyi={R\bibinitperiod},
+           given={Vito},
+           giveni={V\bibinitperiod}}}%
+        {{hash=7b875a79654461d9effe4badbfe949c4}{%
+           family={Versaci},
+           familyi={V\bibinitperiod},
+           given={Mario},
+           giveni={M\bibinitperiod}}}%
+      }
+      \strng{namehash}{c533de6d724ef1473e2ebc24b2b432c1}
+      \strng{fullhash}{c533de6d724ef1473e2ebc24b2b432c1}
+      \strng{fullhashraw}{c533de6d724ef1473e2ebc24b2b432c1}
+      \strng{bibnamehash}{c533de6d724ef1473e2ebc24b2b432c1}
+      \strng{authorbibnamehash}{c533de6d724ef1473e2ebc24b2b432c1}
+      \strng{authornamehash}{c533de6d724ef1473e2ebc24b2b432c1}
+      \strng{authorfullhash}{c533de6d724ef1473e2ebc24b2b432c1}
+      \strng{authorfullhashraw}{c533de6d724ef1473e2ebc24b2b432c1}
+      \field{sortinit}{1}
+      \field{sortinithash}{4f6aaa89bab872aa0999fec09ff8e98a}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{IEEE Access}
+      \field{title}{A Review on Finite State Machines and Statecharts in Embedded Software Design}
+      \field{volume}{6}
+      \field{year}{2018}
+      \field{pages}{29305\bibrangedash 29318}
+      \range{pages}{14}
+      \verb{doi}
+      \verb 10.1109/ACCESS.2018.2839304
+      \endverb
+    \endentry
     \entry{bacchetta2021touchgfx}{thesis}{}{}
       \name{author}{1}{}{%
         {{hash=f0b693729d1e274623cdb6d665ab88d8}{%
@@ -41,8 +163,8 @@
       \strng{authornamehash}{f0b693729d1e274623cdb6d665ab88d8}
       \strng{authorfullhash}{f0b693729d1e274623cdb6d665ab88d8}
       \strng{authorfullhashraw}{f0b693729d1e274623cdb6d665ab88d8}
-      \field{sortinit}{1}
-      \field{sortinithash}{4f6aaa89bab872aa0999fec09ff8e98a}
+      \field{sortinit}{2}
+      \field{sortinithash}{8b555b3791beccb63322c22f3320aa9a}
       \field{labelnamesource}{author}
       \field{labeltitlesource}{title}
       \field{note}{Accessed October 17, 2025}
@@ -61,6 +183,8 @@
       \endverb
     \endentry
   \enddatalist
+  \missing{lvgl2024docs}
+  \missing{yiu2021definitive}
 \endrefsection
 \endinput
 

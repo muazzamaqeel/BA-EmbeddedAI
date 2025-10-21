@@ -2397,6 +2397,9 @@
     <bcf:datasource type="file" datatype="bibtex" glob="false">mitthesis-sample.bib</bcf:datasource>
   </bcf:bibdata>
   <bcf:section number="0">
+    <bcf:citekey order="1" intorder="1">mazloum2019embedded</bcf:citekey>
+    <bcf:citekey order="1" intorder="2">balasubramanian2017fsm</bcf:citekey>
+    <bcf:citekey order="1" intorder="3">morabito2018statecharts</bcf:citekey>
   </bcf:section>
   <!-- SORTING TEMPLATES -->
   <bcf:sortingtemplate name="none">

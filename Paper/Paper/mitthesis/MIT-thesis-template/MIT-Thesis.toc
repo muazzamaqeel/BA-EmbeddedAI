@@ -10,20 +10,20 @@
 \contentsline {section}{\numberline {3.1}Requirements}{15}{section.3.1}%
 \contentsline {section}{\numberline {3.2}Concept and Design}{17}{section.3.2}%
 \contentsline {subsection}{\numberline {3.2.1}Graphical User Interface}{17}{subsection.3.2.1}%
-\contentsline {subsection}{\numberline {3.2.2}Face Detection and Recognition}{22}{subsection.3.2.2}%
-\contentsline {subsection}{\numberline {3.2.3}Power Consumption}{22}{subsection.3.2.3}%
-\contentsline {subsection}{\numberline {3.2.4}Cryptography}{22}{subsection.3.2.4}%
-\contentsline {section}{\numberline {3.3}System and Software Design}{22}{section.3.3}%
-\contentsline {subsection}{\numberline {3.3.1}System Design}{22}{subsection.3.3.1}%
-\contentsline {subsection}{\numberline {3.3.2}Software Design}{22}{subsection.3.3.2}%
-\contentsline {chapter}{\numberline {4}Results and Discussion}{23}{chapter.4}%
-\contentsline {section}{\numberline {4.1}Tests}{23}{section.4.1}%
-\contentsline {subsection}{\numberline {4.1.1}Tests}{23}{subsection.4.1.1}%
-\contentsline {chapter}{\numberline {5}Evaluation}{25}{chapter.5}%
-\contentsline {section}{\numberline {5.1}Discussion}{25}{section.5.1}%
-\contentsline {subsection}{\numberline {5.1.1}Training Parameters}{25}{subsection.5.1.1}%
-\contentsline {section}{\numberline {5.2}Outlook}{25}{section.5.2}%
-\contentsline {chapter}{\numberline {A}Code listing}{27}{appendix.A}%
-\contentsline {chapter}{\numberline {B}One-term coefficients for heat conduction}{29}{appendix.B}%
-\contentsline {section}{\numberline {B.1}A multipage table of numbers}{29}{section.B.1}%
-\contentsline {backmatter}{References}{31}{appendix*.13}%
+\contentsline {subsection}{\numberline {3.2.2}Face Detection and Recognition}{20}{subsection.3.2.2}%
+\contentsline {subsection}{\numberline {3.2.3}Power Consumption}{20}{subsection.3.2.3}%
+\contentsline {subsection}{\numberline {3.2.4}Cryptography}{20}{subsection.3.2.4}%
+\contentsline {section}{\numberline {3.3}System and Software Design}{20}{section.3.3}%
+\contentsline {subsection}{\numberline {3.3.1}System Design}{20}{subsection.3.3.1}%
+\contentsline {subsection}{\numberline {3.3.2}Software Design}{20}{subsection.3.3.2}%
+\contentsline {chapter}{\numberline {4}Results and Discussion}{21}{chapter.4}%
+\contentsline {section}{\numberline {4.1}Tests}{21}{section.4.1}%
+\contentsline {subsection}{\numberline {4.1.1}Tests}{21}{subsection.4.1.1}%
+\contentsline {chapter}{\numberline {5}Evaluation}{23}{chapter.5}%
+\contentsline {section}{\numberline {5.1}Discussion}{23}{section.5.1}%
+\contentsline {subsection}{\numberline {5.1.1}Training Parameters}{23}{subsection.5.1.1}%
+\contentsline {section}{\numberline {5.2}Outlook}{23}{section.5.2}%
+\contentsline {chapter}{\numberline {A}Code listing}{25}{appendix.A}%
+\contentsline {chapter}{\numberline {B}One-term coefficients for heat conduction}{27}{appendix.B}%
+\contentsline {section}{\numberline {B.1}A multipage table of numbers}{27}{section.B.1}%
+\contentsline {backmatter}{References}{29}{appendix*.13}%
