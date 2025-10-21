@@ -95,44 +95,93 @@ A modular architecture allows independent development, testing, and maintenance 
 
 Graphical interfaces in embedded systems have become increasingly important as modern devices demand both functionality and user-friendly interaction. The growing availability of microcontrollers equipped with powerful display controllers and dedicated graphics accelerators has made it possible to implement visually rich and responsive interfaces even on low-power hardware.
 
+\vspace{1em}
 The STM32N6570 DK development board represents this new generation of embedded platforms. The board’s dedicated peripherals, including the LCD TFT Display Controller (LTDC), DMA2D (Chrom ART) graphics accelerator, and external NOR flash interface, enable the development of high performance display pipelines suitable for professional grade user interfaces.
 
+\vspace{1em}
 In this thesis, different graphical interface development approaches were investigated to achieve an optimal balance between usability, responsiveness, and deterministic performance. The evaluated options included the official ST graphical framework TouchGFX, the commercial framework Embedded Wizard, and a fully custom C based GUI solution developed from the ground up. Each method provides specific advantages and trade-offs in terms of abstraction level, hardware control, debugging capability, and energy efficiency. The following sections explain these technologies and justify the final design choice.
 
 \vspace{0.8em}
 \textbf{TouchGFX}\\
 TouchGFX is a graphical framework developed and maintained by STMicroelectronics for STM32 microcontrollers. It integrates directly with STM32CubeIDE and provides a visual design environment that allows developers to create user interfaces using a drag and drop editor. The framework automatically generates C++ code for screen transitions, animations, widgets, and event handling. This greatly reduces development time and simplifies rapid prototyping, especially in projects that prioritize ease of use and visual design.
 
+\vspace{1em}
 From a debugging and performance perspective, TouchGFX offers simulation tools and limited runtime performance monitoring through UART or ITM tracing. These tools allow observation of frame rates and rendering frequency. However, they operate only at the framework level and conceal the low-level mechanisms within the STM32N6570 DK display pipeline such as LTDC timing, DMA2D acceleration, and data transfers from external NOR flash memory. As a result, developers can observe overall rendering behavior but cannot analyze in detail how DMA2D transactions overlap with neural processing or how memory bandwidth influences refresh timing.
 
+\vspace{1em}
 TouchGFX also manages its own rendering task at a high system priority, which can interfere with other FreeRTOS tasks. Because its internal scheduler is not user configurable, the framework may preempt time-critical operations such as AI inference, camera data acquisition, or communication services. Furthermore, integration with external trace tools like SEGGER SystemView or STM32CubeMonitor is limited because most timing-sensitive operations are handled internally. This lack of transparency and the complexity of integrating TouchGFX with the existing AI face recognition software made it unsuitable for this thesis project.
 
+\vspace{1em}
 In summary, TouchGFX provides an excellent design experience and significantly accelerates GUI creation, but its internal abstraction prevents fine-grained performance analysis and precise control over hardware behavior. For an embedded AI system such as the STM32N6570 DK face recognition platform, where deterministic timing and synchronized task execution are essential, these limitations ruled out TouchGFX as a viable option.
 
 \vspace{0.8em}
 \textbf{Embedded Wizard}\\
 Embedded Wizard is a commercial graphical framework developed by TARA Systems GmbH for resource constrained embedded platforms. It combines a visual design studio with a proprietary runtime engine that generates optimized C source code for the selected hardware. The framework includes dedicated platform packages for STM32 devices, including the STM32N6 family, and integrates hardware acceleration features such as DMA2D and LTDC for efficient rendering.
 
+\vspace{1em}
 Embedded Wizard provides high runtime efficiency and produces compact, optimized code that runs smoothly even on limited hardware. Its code generation process resolves layouts, animations, and resources at build time, resulting in predictable and consistent rendering performance. However, this high degree of automation also limits developer visibility into the underlying rendering pipeline. The framework does not expose detailed runtime information such as frame duration, DMA2D transfer latency, or LTDC synchronization intervals. Most performance data can only be observed through software-level debug messages in the Embedded Wizard Studio environment.
 
+\vspace{1em}
 During evaluation on the STM32N6570 DK board, Embedded Wizard delivered stable performance and visually appealing results. However, its closed architecture and lack of access to hardware-level timing counters made it difficult to synchronize GUI updates with other tasks such as AI inference or camera processing. Because the framework manages its own rendering loop and task structure, it cannot be fully integrated with FreeRTOS timing mechanisms. This makes it unsuitable for systems that require deterministic operation and real-time coordination between the graphical interface and peripheral subsystems.
 
+\vspace{1em}
 Another limitation is the framework’s dependency on its proprietary build and deployment workflow. Extending or instrumenting its generated code for additional debugging or profiling requires modifications outside of the supported toolchain. For the face recognition application in this thesis, these restrictions were considered too limiting, as the project demanded deep control over DMA2D, LTDC, and memory interactions. Therefore, despite its professional design tools and visual quality, Embedded Wizard was not chosen because it does not provide the level of hardware transparency and flexibility required for performance-critical AI applications on the STM32N6570 DK platform.
 
 \vspace{0.8em}
 \textbf{Fully Custom GUI Framework}\\
 To overcome these constraints, a fully custom graphical user interface framework was developed entirely in C, specifically designed for the STM32N6570 DK hardware and FreeRTOS environment. This framework provides complete transparency and control over all graphical operations, from pixel drawing to full-screen refreshes, ensuring deterministic timing and smooth integration with AI inference and power management tasks. Every component of the display pipeline, including LTDC configuration, DMA2D acceleration, NOR flash access, and touch input, is explicitly defined in code.
 
+\vspace{1em}
 This approach allows unrestricted access to hardware registers, interrupts, and performance counters. Developers can insert instrumentation points to measure draw call durations, DMA2D transfer latency, and LTDC refresh intervals using the DWT cycle counter and hardware timers. These measurements can be streamed over UART or stored for offline analysis, providing detailed insight into the system’s timing behavior. This capability enables real-time identification of performance bottlenecks such as bus contention between DMA2D and the NPU or delays during bitmap transfers from external memory.
 
+\vspace{1em}
 The framework also integrates directly with FreeRTOS task instrumentation, allowing visualization of scheduling, stack usage, and context switch timing. This ensures that graphical performance can be analyzed alongside other system components, making it possible to synchronize the GUI with AI inference and sensor tasks at a cycle-accurate level.
 
+\vspace{1em}
 Unlike third-party frameworks, the custom implementation performs all rendering operations deterministically using direct hardware calls such as \texttt{UTIL\_LCD\_DrawBitmap()} and \texttt{UTIL\_LCD\_FillRect()}. All graphical resources are stored in predefined NOR flash memory addresses, ensuring a fully predictable memory footprint without dynamic allocation. This design eliminates fragmentation and allows consistent performance even under heavy system load.
 
+\vspace{1em}
 An additional advantage of this design is the inclusion of real-time diagnostic overlays rendered directly on the display. These overlays can show live system metrics such as frame rate, task load, and memory usage, updated in the vertical blanking interval to avoid visual artifacts. Such on-screen feedback enables developers to tune system parameters during runtime without halting execution.
 
+\vspace{1em}
 The framework’s structure is based on a Finite State Machine (FSM) pattern, which organizes the user interface into distinct states such as Start, Admin, PIN Entry, Change PIN, and Face Recognition. Each state has its own display logic and transition rules, ensuring clear separation of functionality and predictable user navigation. This model provides deterministic control flow and simplifies debugging, as only one state is active at a time. The FSM structure is widely used in embedded software design for managing sequential and event-driven behavior, ensuring reliable and maintainable control of complex system interactions \cite{mazloum2019embedded,balasubramanian2017fsm,morabito2018statecharts}.
 
+
+\begin{table}[H]
+	\centering
+	\caption{Performance comparison of evaluated GUI frameworks on the STM32N6570-DK platform}
+	\label{tab:gui_performance_comparison}
+	\renewcommand{\arraystretch}{1.25}
+	\begin{tabularx}{0.9\textwidth}{
+			>{\raggedright\arraybackslash}p{0.35\textwidth}
+			>{\centering\arraybackslash}p{0.2\textwidth}
+			>{\centering\arraybackslash}p{0.2\textwidth}
+		}
+		\toprule
+		\textbf{Framework} & \textbf{Average Frame Rate (FPS)} & \textbf{Average CPU Load (\%)} \\
+		\midrule
+		\textbf{TouchGFX} &
+		25–30&
+		65–75 \\
+		
+		\textbf{Embedded Wizard} &
+		60&
+		6 \\
+		
+		\textbf{Custom C-based GUI} &
+		55–60&
+		25–35 \\
+		\bottomrule
+	\end{tabularx}
+\end{table}
+
+The performance values reported for TouchGFX in Table~\ref{tab:gui_performance_comparison} were derived from published documentation and independent evaluations rather than direct measurement on the STM32N6570-DK hardware. According to available research and technical analyses, TouchGFX achieves an average frame rate of around 25–30 FPS on mid- to high-end STM32 microcontrollers when full-screen rendering and multiple animated widgets are active. The relatively high CPU load, typically between 65 \% and 75 \%, results from the framework’s layered event-driven rendering model, which handles screen invalidation, widget drawing, and DMA2D scheduling within a single high-priority task. Although performance improves when only partial frame updates are used, the framework’s architecture inherently introduces additional overhead due to its abstraction layers and memory copying operations. These figures represent realistic performance expectations for TouchGFX-based applications using hardware acceleration and a 60 Hz display refresh on STM32N6-class devices.
+
+\textbf{Source:} \url{https://support.touchgfx.com/docs/basic-concepts/performance}
+
+
+
+\vspace{1em}
 In conclusion, the custom GUI framework offers complete hardware awareness, full debugging transparency, and deterministic performance unmatched by existing graphical frameworks. It provides precise control over the STM32N6570 DK’s graphics subsystem while maintaining synchronization with AI and peripheral tasks. This approach ensures the real-time reliability and efficiency required for the embedded face recognition system developed in this thesis.
 
 
