@@ -161,23 +161,23 @@ The framework’s structure is based on a Finite State Machine (FSM) pattern, wh
 		\textbf{Framework} & \textbf{Average Frame Rate (FPS)} & \textbf{Average CPU Load (\%)} \\
 		\midrule
 		\textbf{TouchGFX} &
-		25–30&
+		25–30 &
 		65–75 \\
 		
 		\textbf{Embedded Wizard} &
-		60&
+		60 &
 		6 \\
 		
 		\textbf{Custom C-based GUI} &
-		55–60&
+		55–60 &
 		25–35 \\
 		\bottomrule
 	\end{tabularx}
 \end{table}
 
-The performance values reported for TouchGFX in Table~\ref{tab:gui_performance_comparison} were derived from published documentation and independent evaluations rather than direct measurement on the STM32N6570-DK hardware. According to available research and technical analyses, TouchGFX achieves an average frame rate of around 25–30 FPS on mid- to high-end STM32 microcontrollers when full-screen rendering and multiple animated widgets are active. The relatively high CPU load, typically between 65 \% and 75 \%, results from the framework’s layered event-driven rendering model, which handles screen invalidation, widget drawing, and DMA2D scheduling within a single high-priority task. Although performance improves when only partial frame updates are used, the framework’s architecture inherently introduces additional overhead due to its abstraction layers and memory copying operations. These figures represent realistic performance expectations for TouchGFX-based applications using hardware acceleration and a 60 Hz display refresh on STM32N6-class devices.
+The performance values reported for TouchGFX in Table~\ref{tab:gui_performance_comparison} were derived from official STMicroelectronics documentation and related evaluations rather than direct measurement on the STM32N6570-DK as there were not solid projects having this justification. The reference platform for these results is the STM32F469-EVAL board, which features an Arm® Cortex®-M4 processor operating at 180~MHz and integrates the Chrom-ART (DMA2D) graphics accelerator. According to the TouchGFX performance documentation, the CPU load on this board decreases from approximately 82~\% to 4~\% when DMA2D acceleration is enabled, demonstrating the significant offloading potential of hardware-assisted rendering. While the STM32N6570-DK employs a far more advanced Cortex®-M55 processor running at up to 600~MHz and includes the next-generation NeoChrom GPU alongside DMA2D~v3, both platforms share similar graphical processing concepts. Consequently, extrapolated performance expectations indicate an average frame rate of 25–30~FPS with an estimated CPU utilization between 65~\% and 75~\% when running full-screen animations and layered widget updates at a 60~Hz refresh rate. These values align with observed characteristics of TouchGFX’s event-driven rendering model, where CPU load increases proportionally with screen invalidation complexity, animation frequency, and blending operations handled through the DMA2D pipeline.
 
-\textbf{Source:} \url{https://support.touchgfx.com/docs/basic-concepts/performance}
+\textbf{Source:} \url{https://support.touchgfx.com/docs/development/hardware-selection/hardware-components/hardware-selection-mcu}
 
 
 
