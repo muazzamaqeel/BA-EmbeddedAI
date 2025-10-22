@@ -59,6 +59,7 @@
 #include "app_ui_pin_face_rec.h"
 #include "crypto_utils.h"
 #include "refset_bin.h"   // new SD + AES loader
+#include "app_change_pin.h"
 
 /* If the generated header that declares these isn't included by your BSP,
  * keep these forward decls to avoid implicit-decl warnings. */
@@ -911,12 +912,20 @@ void pp_thread_fct(void *arg)
       printf("[FR] match: %s  cos=%.3f  (dt=%lums)\r\n", final_name, final_s, (unsigned long)dt);
 
       if (strcmp(final_name, "Unknown") != 0 && final_s >= FR_THR_ON) {
-          // Face recognized with enough confidence
           printf("[UI] Launching PIN screen for %s...\r\n", final_name);
-          UI_FR_PinScreen_Show();
-          UI_FR_PinScreen_WaitForOK();
+
+          // --- Decrypt corresponding PIN file ---
+          if (!FR_LoadAndDecryptPinForName("0:pin", final_name)) {
+              printf("[UI][ERR] No PIN file for %s, skipping PIN screen.\r\n", final_name);
+          } else {
+              printf("[UI] Loaded decrypted PIN for %s → %s\r\n", final_name, g_current_pin);
+              UI_FR_PinScreen_Show();
+              UI_FR_PinScreen_WaitForOK();
+          }
+
           printf("[UI] PIN screen done, resuming pipeline...\r\n");
       }
+
 
 #if DBG_PRINT_TOPK
       if (K > 0) {

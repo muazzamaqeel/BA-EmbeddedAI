@@ -1,5 +1,8 @@
 #pragma once
 #include <stdint.h>
+#include <stdbool.h>
+
+bool FR_LoadAndDecryptPinForName(const char *base_dir, const char *name);
 
 typedef struct {
     const char* name;

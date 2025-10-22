@@ -12,6 +12,10 @@ from Crypto.Util.Padding import pad
 AES_KEY = bytes.fromhex("603DEB1015CA71BE2B73AEF0857D7781")  # 128-bit key
 AES_IV  = bytes.fromhex("000102030405060708090A0B0C0D0E0F")   # 16-byte IV
 
+
+# ==============================
+# AES encryption helper
+# ==============================
 def encrypt_bytes(data: bytes) -> bytes:
     """Encrypt raw bytes using AES-CBC (PKCS7 only if not 16B aligned)."""
     print(f"[AES] Raw length: {len(data)} bytes")
@@ -28,7 +32,7 @@ def encrypt_bytes(data: bytes) -> bytes:
 
 
 # ==============================
-# TensorFlow Lite import (prefer tflite-runtime)
+# TensorFlow Lite import
 # ==============================
 try:
     import tflite_runtime.interpreter as tflite
@@ -106,18 +110,8 @@ def l2_normalize(v, eps=1e-9):
 
 
 # ==============================
-# BIN file emitter (per person)
+# BIN file emitter (embeddings)
 # ==============================
-# Binary layout per file:
-#   0:4    "FREB"
-#   4:6    uint16 version = 1
-#   6:8    uint16 name_len (bytes, UTF-8)
-#   8:10   uint16 emb_dim (floats before encryption)
-#   10:12  uint16 n_emb
-#   12:    name (name_len bytes, no NUL)
-#   repeat n_emb times:
-#     uint32 enc_len
-#     enc_len bytes ciphertext (AES-128-CBC, PKCS7 as needed)
 def emit_bin(out_bin, subject, vecs, encrypt_fn):
     print(f"[CGEN] Writing BIN → {out_bin}")
     name = subject.encode("utf-8")
@@ -140,6 +134,33 @@ def emit_bin(out_bin, subject, vecs, encrypt_fn):
             f.write(enc)
             print(f"[CGEN] -> wrote enc_len={len(enc)}")
     print(f"[CGEN] ✅ BIN written: {out_bin}  (emb_dim={emb_dim}, n_emb={n_emb})")
+
+
+# ==============================
+# PIN encryption emitter
+# ==============================
+def emit_pin_bin(pin_path, out_bin, subject, encrypt_fn):
+    if not os.path.exists(pin_path):
+        print(f"[PIN] No pin.txt found for {subject}, skipping.")
+        return
+    with open(pin_path, "r", encoding="utf-8") as f:
+        pin_value = f.read().strip()
+    if not pin_value:
+        print(f"[PIN] Empty pin.txt for {subject}, skipping.")
+        return
+
+    print(f"[PIN] Encrypting PIN for {subject}: '{pin_value}'")
+    raw = pin_value.encode("utf-8")
+    enc = encrypt_fn(raw)
+
+    with open(out_bin, "wb") as f:
+        f.write(b"FPIN")                     # header tag
+        f.write(struct.pack("<H", 1))        # version
+        f.write(struct.pack("<H", len(subject)))
+        f.write(subject.encode("utf-8"))
+        f.write(struct.pack("<I", len(enc)))
+        f.write(enc)
+    print(f"[PIN] ✅ PIN BIN written: {out_bin} (len={len(enc)} bytes)")
 
 
 # ==============================
@@ -166,6 +187,8 @@ def main():
     out_txt = os.path.join(person_dir, f"embeddings_{args.subject}.txt")
     out_bin = os.path.join(person_dir, f"{args.subject}.bin")
     out_npz = os.path.join(person_dir, f"embeddings_{args.subject}.npz")
+    out_pin_bin = os.path.join(person_dir, f"{args.subject.lower()}_pin.bin")
+    pin_txt = os.path.join(args.in_dir, "pin.txt")
 
     print(f"[ARGS] Subject={args.subject}")
     print("[MODEL] Loading TFLite model...")
@@ -210,6 +233,9 @@ def main():
     emit_bin(out_bin, args.subject, vecs, encrypt_bytes)
     print(f"[DONE] Wrote:\n - {out_bin}\n - {out_txt}")
 
+    # --- Emit PIN BIN if available ---
+    emit_pin_bin(pin_txt, out_pin_bin, args.subject, encrypt_bytes)
+
     if args.save_npz:
         np.savez(out_npz, labels=np.array(labels),
                  embeddings=np.array(vecs, dtype=np.float32))
@@ -237,7 +263,6 @@ if __name__ == "__main__":
         root = os.path.dirname(os.path.abspath(__file__))
         model_path = os.path.join(root, "facenet_512_int_quant.tflite")
 
-        # consider each subfolder with images as a different subject
         subfolders = [
             f for f in os.listdir(root)
             if os.path.isdir(os.path.join(root, f))
@@ -259,8 +284,6 @@ if __name__ == "__main__":
             ]
             subprocess.run(cmd, check=True)
 
-        # Optional: write a tiny manifest (directory listing) for your firmware
-        # The firmware doesn't need it, but it can help debugging.
         all_faces_root = os.path.join(root, "all_faces")
         manifest = os.path.join(all_faces_root, "manifest.txt")
         bins = sorted(glob.glob(os.path.join(all_faces_root, "*", "*.bin")))

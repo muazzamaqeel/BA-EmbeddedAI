@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <math.h>
+#include <ctype.h>
+#include "app_change_pin.h"
 
 extern void FR_DecryptAllRefsetOnce(void);
 
@@ -131,4 +133,73 @@ void FR_Refset_FreeAll(void)
     free(g_enc.v);
     g_enc.v = NULL;
     g_enc.n = 0;
+}
+
+
+
+/* ============================================================
+ *  PIN BIN loader and decryptor
+ *  - Expects files like "aida_pin.bin" in /pin directory
+ *  - Header format:
+ *        0:4    "FPIN"
+ *        4:6    uint16 version
+ *        6:8    uint16 name_len
+ *        8:?    UTF-8 name
+ *        ?      uint32 enc_len
+ *        ?      enc_len bytes ciphertext (AES-128-CBC)
+ * ============================================================ */
+
+bool FR_LoadAndDecryptPinForName(const char *base_dir, const char *name)
+{
+    char lname[64];
+    strncpy(lname, name, sizeof(lname)-1);
+    lname[sizeof(lname)-1] = '\0';
+    for (char *p = lname; *p; ++p) *p = tolower(*p);
+
+    char path[128];
+    snprintf(path, sizeof(path), "%s/%s_pin.bin", base_dir, lname);
+
+    FIL f;
+    FRESULT r = f_open(&f, path, FA_READ);
+    if (r != FR_OK) {
+        printf("[PIN] File not found: %s\r\n", path);
+        return false;
+    }
+
+    uint8_t hdr[8]; UINT br;
+    f_read(&f, hdr, sizeof(hdr), &br);
+    if (memcmp(hdr, "FPIN", 4) != 0) {
+        printf("[PIN] Invalid header in %s\r\n", path);
+        f_close(&f);
+        return false;
+    }
+
+    uint16_t ver = hdr[4] | (hdr[5]<<8);
+    uint16_t name_len = hdr[6] | (hdr[7]<<8);
+
+    char file_name[64] = {0};
+    f_read(&f, file_name, name_len, &br);
+    file_name[name_len] = '\0';
+
+    uint8_t len4[4];
+    f_read(&f, len4, 4, &br);
+    uint32_t enc_len = len4[0] | (len4[1]<<8) | (len4[2]<<16) | (len4[3]<<24);
+
+    uint8_t *enc_buf = xmalloc(enc_len);
+    f_read(&f, enc_buf, enc_len, &br);
+    f_close(&f);
+
+    printf("[PIN] Loaded %s (enc_len=%lu)\r\n", path, (unsigned long)enc_len);
+
+    aes_cbc_pkcs7_decrypt_inplace(enc_buf, (size_t *)&enc_len);
+
+    enc_buf[enc_len] = '\0';
+
+    printf("[PIN] Decrypted PIN for %s: '%s'\r\n", name, (char*)enc_buf);
+
+    memset(g_current_pin, 0, sizeof(g_current_pin));
+    strncpy(g_current_pin, (char*)enc_buf, sizeof(g_current_pin)-1);
+
+    free(enc_buf);
+    return true;
 }
