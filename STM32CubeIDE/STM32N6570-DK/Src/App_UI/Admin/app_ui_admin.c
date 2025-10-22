@@ -1,24 +1,17 @@
-/**
- ******************************************************************************
- * @file    app_ui_admin.c
- * @brief   Admin menu screen (after PIN success)
- ******************************************************************************
- */
-
 #include "stm32_lcd.h"
 #include "stm32_lcd_ex.h"
 #include "stm32n6570_discovery.h"
 #include "stm32n6570_discovery_ts.h"
 #include "stm32n6570_discovery_lcd.h"
 #include <stdio.h>
-#include "app_ui_admin.h"
 #include <stdbool.h>
+#include "app_ui_admin.h"   // ✅ includes the enum and prototype
 #include "app_change_pin.h"
 
 /* --- Address of Admin background image in NOR Flash --- */
 #define ADMIN_BG_ADDR   ((uint32_t)0x778A0000)
 
-/* --- Button geometry (transparent) --- */
+/* --- Button geometry --- */
 #define BTN1_X   200
 #define BTN1_Y   300
 #define BTN1_W   150
@@ -29,20 +22,15 @@
 #define BTN2_W   150
 #define BTN2_H   80
 
-/* ===== Internal helpers ===== */
 static void UI_Admin_DrawBackground(void)
 {
     UTIL_LCD_SetLayer(0);
     BSP_LCD_DisplayOn(0);
-
-    /* Draw RGB565 raw image stored in NOR */
     UTIL_LCD_DrawBitmap(0, 0, (uint8_t*)ADMIN_BG_ADDR);
-
     printf("[UI] Admin background drawn (image @0x%08lX)\r\n", (unsigned long)ADMIN_BG_ADDR);
 }
 
-/* ===== Public API ===== */
-void UI_AdminScreen_Show(void)
+AdminResult UI_AdminScreen_Show(void)
 {
     UI_Admin_DrawBackground();
     printf("[UI] Admin screen shown (with 2 transparent buttons)\r\n");
@@ -59,30 +47,28 @@ void UI_AdminScreen_Show(void)
 
                 if (tx >= BTN1_X && tx <= BTN1_X + BTN1_W &&
                     ty >= BTN1_Y && ty <= BTN1_Y + BTN1_H) {
+
                     printf("[UI] Admin Button1 pressed (Change PIN)\r\n");
                     CP_Result res = UI_ChangePinScreen_Show();
 
                     if (res == CP_RESULT_BACK_TO_START) {
                         printf("[UI] Returning to Start screen after PIN change\r\n");
-
-                        // --- Clear any lingering touch ---
-                        TS_State_t ts_state;
+                        // clear touch
                         for (int i = 0; i < 10; i++) {
                             BSP_TS_GetState(0, &ts_state);
-                            if (!ts_state.TouchDetected)
-                                break;
+                            if (!ts_state.TouchDetected) break;
                             HAL_Delay(50);
                         }
-
-                        return;
-                    }
-                    else {
-                        UI_Admin_DrawBackground(); // stay in admin if needed
+                        return ADMIN_RESULT_BACK_TO_START;   // ✅ back to Start
+                    } else {
+                        UI_Admin_DrawBackground();
+                        return ADMIN_RESULT_STAY;
                     }
                 }
                 else if (tx >= BTN2_X && tx <= BTN2_X + BTN2_W &&
                          ty >= BTN2_Y && ty <= BTN2_Y + BTN2_H) {
                     printf("[UI] Admin Button2 pressed\r\n");
+                    return ADMIN_RESULT_STAY;
                 }
             }
             else if (!ts_state.TouchDetected) {

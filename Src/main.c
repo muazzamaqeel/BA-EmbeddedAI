@@ -50,6 +50,7 @@
 #include "system_display.h"
 #include "app_sleepmode.h"
 #include "usb_embeddings.h"
+#include "app_ui_admin.h"
 
 UART_HandleTypeDef huart1;
 
@@ -150,23 +151,40 @@ if (XSPI_NOR_Map_Once() != 0) {
   printf("[MAIN] SD card check completed.\r\n\r\n");
 
 
-  while (1) {
+  /* ======================================================
+   * MAIN UI LOOP — behaves like original version
+   * ====================================================== */
+  printf("[MAIN] Starting UI navigation loop...\r\n");
+
+  while (1)
+  {
+      // --- Show Start screen ---
       UI_StartScreen_Show();
       UI_ButtonResult res = UI_WaitForButton();
 
-      if (res == UI_BTN_START) {
+      if (res == UI_BTN_START)
+      {
           printf("[MAIN] Launching application pipeline...\r\n");
           Start_ApplicationTasks();
           APP_SleepMode_Init();
-          break; // or return if pipeline runs forever
+          break; // exit to run pipeline
       }
-      else if (res == UI_BTN_ADMIN) {
+      else if (res == UI_BTN_ADMIN)
+      {
           printf("[MAIN] Launching Admin screen...\r\n");
-          UI_AdminScreen_Show();
-          // when Admin returns (after Change PIN), loop back → Start screen
+          AdminResult adminRes = UI_AdminScreen_Show();
+
+          if (adminRes == ADMIN_RESULT_BACK_TO_START)
+          {
+              printf("[MAIN] Admin returned → back to Start screen\r\n");
+              continue;  // loop again → Start screen
+          }
+          else
+          {
+              printf("[MAIN] Staying in Admin\r\n");
+          }
       }
   }
-
 
 
 

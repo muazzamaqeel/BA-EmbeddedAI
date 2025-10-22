@@ -1,5 +1,5 @@
 #define MY_NAME "Muazzam"
-#define FR_SUBJECT_NAME MY_NAME   // <— add this so logs say “Muazzam”, not “ME”
+#define FR_SUBJECT_NAME MY_NAME
 #include "npu_guard.h"
 #include "fr_helpers.h"
 #include "app_shared.h"
@@ -7,9 +7,6 @@
 #include "cache_utils.h"
 #include "facedetection_imp_bridge.h"
 #include "facerecognition_imp.h"
-
-/* FaceRec dedicated user IO (non-aliased, PSRAM) */
-
 
 /**
  ******************************************************************************
