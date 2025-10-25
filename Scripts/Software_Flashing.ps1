@@ -2,8 +2,30 @@
 # STM32N6570-DK: FSBL + Detector + FaceID + Main App (Final Script, Relative Paths, Persistent Console)
 $ErrorActionPreference = 'Stop'
 
-# --- External loader (absolute) ---
-$env:DKEL = "C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\ExternalLoader\MX66UW1G45G_STM32N6570-DK.stldr"
+
+
+# --- External loader (from config.json) ---
+$configPath = Join-Path $PSScriptRoot "config.json"
+if (-not (Test-Path $configPath)) {
+    throw "Missing configuration file: $configPath"
+}
+
+try {
+    $config = Get-Content $configPath -Raw | ConvertFrom-Json
+    $env:DKEL = $config.LoaderPath
+}
+catch {
+    throw "Failed to parse config.json — check syntax or file path."
+}
+
+if (-not (Test-Path $env:DKEL)) {
+    throw "Invalid loader path: $env:DKEL"
+}
+
+Write-Host "Using External Loader: $env:DKEL"
+
+
+
 
 # --- Base directory ---
 $base = Split-Path -Parent $MyInvocation.MyCommand.Definition
