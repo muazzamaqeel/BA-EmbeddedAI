@@ -7,6 +7,8 @@
 #include "cache_utils.h"
 #include "facedetection_imp_bridge.h"
 #include "facerecognition_imp.h"
+#include <stdbool.h>
+#include <stdint.h>   // ✅ add this
 
 /**
  ******************************************************************************
@@ -64,6 +66,9 @@ static StaticTask_t fr_thread;
 static StackType_t fr_thread_stack[2 * configMINIMAL_STACK_SIZE];
 
 TaskHandle_t g_fr_task = NULL;
+
+
+
 
 #if FR_IN_IS_UINT8
 static uint8_t g_fr_in_user [FR_IN_W * FR_IN_H * 3] ALIGN_32;
@@ -1270,6 +1275,17 @@ void app_init_pipeline(void)
   APP_Touch_Init();
 }
 
+// Place this near top (after includes)
+// --- Sleep delay task (static version)
+static StaticTask_t sleep_delay_tcb;
+static StackType_t  sleep_delay_stack[256];  // stack size words, not bytes
+
+static void vSleepDelayTask(void *argument)
+{
+    (void)argument;
+    APP_SleepMode_EnableCounterDelayed(8000);  // 8s grace period
+    vTaskDelete(NULL);
+}
 
 
 void app_start_pipeline(void)
@@ -1315,6 +1331,24 @@ void app_start_pipeline(void)
   assert(hdl != NULL);
 
   printf("[APP] Threads launched successfully.\r\n");
+
+  printf("[APP] Pipeline fully started.\r\n");
+
+
+
+
+  // Then in app_start_pipeline():
+  xTaskCreateStatic(
+      vSleepDelayTask,
+      "SleepDelay",
+      sizeof(sleep_delay_stack) / sizeof(StackType_t),
+      NULL,
+      tskIDLE_PRIORITY,
+      sleep_delay_stack,
+      &sleep_delay_tcb
+  );
+
+
 }
 
 

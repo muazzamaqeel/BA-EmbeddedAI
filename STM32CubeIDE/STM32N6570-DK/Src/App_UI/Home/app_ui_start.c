@@ -91,7 +91,7 @@ UI_ButtonResult UI_WaitForButton(void)
                 Pipeline_TriggerStart();
 
                 /* Enable sleep counter after start */
-                APP_SleepMode_EnableCounter(true);
+                //APP_SleepMode_EnableCounter(true);
 
                 return UI_BTN_START;
             }

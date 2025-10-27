@@ -189,3 +189,13 @@ static void exit_sleep(void)
     g_wake_time = g_last_face_time;
     touch_detected_since_last_sleep = false;
 }
+
+void APP_SleepMode_EnableCounterDelayed(uint32_t delay_ms)
+{
+    printf("[SLEEP] Counter will enable after %lu ms\r\n", delay_ms);
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    g_last_face_time = HAL_GetTick();
+    g_sleep_counter_enabled = true;
+    printf("[SLEEP] Counter ENABLED (delayed)\r\n");
+}
+
