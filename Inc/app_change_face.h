@@ -1,8 +1,14 @@
-#ifndef APP_CHANGE_PIN_H
-#define APP_CHANGE_PIN_H
+#ifndef APP_CHANGE_FACE_H
+#define APP_CHANGE_FACE_H
 
-extern char g_current_pin[8];   // current PIN (default "1234")
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-void UI_ChangePinScreen_Show(void);
+void UI_TestPassed_Show(void);
 
-#endif /* APP_CHANGE_PIN_H */
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* APP_CHANGE_FACE_H */
