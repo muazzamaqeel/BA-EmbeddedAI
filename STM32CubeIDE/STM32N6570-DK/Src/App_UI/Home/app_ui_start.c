@@ -102,12 +102,21 @@ UI_ButtonResult UI_WaitForButton(void)
             {
                 printf("[UI] Admin pressed!\r\n");
 
-                UI_PinScreen_Show();
+                BSP_LCD_SetLayerVisible(0, 1, DISABLE);        // 🔹 Hide Start
+                BSP_LCD_Reload(0, BSP_LCD_RELOAD_IMMEDIATE);
+                UTIL_LCD_Clear(UTIL_LCD_COLOR_TRANSPARENT);
+                HAL_Delay(100);
+
+                UI_PinScreen_Show();                           // ✅ PIN now visible
                 UI_PinScreen_WaitForOK();
+
+                BSP_LCD_SetLayerVisible(0, 1, ENABLE);         // 🔹 Show Start again
+                BSP_LCD_Reload(0, BSP_LCD_RELOAD_IMMEDIATE);
 
                 printf("[UI] PIN screen finished, returning to start menu...\r\n");
                 return UI_BTN_ADMIN;
             }
+
         }
         HAL_Delay(50);
     }
