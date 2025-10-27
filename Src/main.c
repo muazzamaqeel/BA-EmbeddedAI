@@ -154,6 +154,10 @@ if (XSPI_NOR_Map_Once() != 0) {
   /* ======================================================
    * MAIN UI LOOP — behaves like original version
    * ====================================================== */
+  printf("[MAIN] Initializing base application...\r\n");
+  app_run();                 // <-- only initialization (no threads yet)
+  APP_SleepMode_Init();      // prepare sleep system early if needed
+
   printf("[MAIN] Starting UI navigation loop...\r\n");
 
   while (1)
@@ -164,20 +168,19 @@ if (XSPI_NOR_Map_Once() != 0) {
 
       if (res == UI_BTN_START)
       {
-          printf("[MAIN] Launching application pipeline...\r\n");
-          Start_ApplicationTasks();
-          APP_SleepMode_Init();
-          break; // exit to run pipeline
+          printf("[MAIN] Start button pressed → launching camera pipeline...\r\n");
+          app_start_pipeline();   // <-- start camera + NN + display threads
+          break;                  // leave loop → main system runs
       }
       else if (res == UI_BTN_ADMIN)
       {
-          printf("[MAIN] Launching Admin screen...\r\n");
+          printf("[MAIN] Admin pressed → opening admin screen...\r\n");
           AdminResult adminRes = UI_AdminScreen_Show();
 
           if (adminRes == ADMIN_RESULT_BACK_TO_START)
           {
               printf("[MAIN] Admin returned → back to Start screen\r\n");
-              continue;  // loop again → Start screen
+              continue;  // re-show start screen
           }
           else
           {
@@ -185,6 +188,7 @@ if (XSPI_NOR_Map_Once() != 0) {
           }
       }
   }
+
 
 
 

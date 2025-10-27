@@ -68,8 +68,15 @@ UI_ButtonResult UI_WaitForButton(void)
             if (tx >= BTN_START_X && tx <= BTN_START_X + BTN_START_W &&
                 ty >= BTN_START_Y && ty <= BTN_START_Y + BTN_START_H) {
                 printf("[UI] Start pressed!\r\n");
+
+                // Signal the pipeline task to start
+                extern void Pipeline_TriggerStart(void);
+                Pipeline_TriggerStart();
+
                 return UI_BTN_START;
             }
+
+
 
             if (tx >= BTN_ADMIN_X && tx <= BTN_ADMIN_X + BTN_ADMIN_W &&
                 ty >= BTN_ADMIN_Y && ty <= BTN_ADMIN_Y + BTN_ADMIN_H) {

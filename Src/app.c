@@ -1202,58 +1202,37 @@ static void xspi_quick_check(void)
 
 
 
-
-
-void app_run()
+void app_init_pipeline(void)
 {
-  /* NOTE: NOR (weights) is mapped in main_thread_fct(). Do not map again here. */
+  printf("Init application (base only)\r\n");
 
-  /* RTOS priorities & handles */
-  UBaseType_t isp_priority = FREERTOS_PRIORITY(2);
-  UBaseType_t pp_priority  = FREERTOS_PRIORITY(-2);
-  UBaseType_t dp_priority  = FREERTOS_PRIORITY(-2);
-  UBaseType_t nn_priority  = FREERTOS_PRIORITY(1);
-  TaskHandle_t hdl;
-  int ret;
-
-  printf("Init application\n");
-
-  /* Enable DWT so DWT_CYCCNT works when debugger not attached */
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
 
-  /* Screen init */
   memset(lcd_bg_buffer, 0, sizeof(lcd_bg_buffer));
   CACHE_OP(SCB_CleanInvalidateDCache_by_Addr(lcd_bg_buffer, sizeof(lcd_bg_buffer)));
   memset(lcd_fg_buffer, 0, sizeof(lcd_fg_buffer));
   CACHE_OP(SCB_CleanInvalidateDCache_by_Addr(lcd_fg_buffer, sizeof(lcd_fg_buffer)));
   Display_init();
 
-  /* Queues */
+  int ret;
   ret = bqueue_init(&nn_input_queue, 2, (uint8_t *[2]){nn_input_buffers[0], nn_input_buffers[1]});  assert(ret == 0);
   ret = bqueue_init(&nn_output_queue, 2, (uint8_t *[2]){nn_output_buffers[0], nn_output_buffers[1]});assert(ret == 0);
 
 #ifdef TRACKER_MODULE
-  /* Tracker init + button */
   ret = TRK_Init();                                   assert(ret == 0);
   ret = BSP_PB_Init(BUTTON_TOGGLE_TRACKING, BUTTON_MODE_GPIO);
   assert(ret == BSP_ERROR_NONE);
 #endif
 
-  /* CPU load stats */
   cpuload_init(&cpu_load);
-
-  /* Camera */
   CAM_Init();
 
-  /* Semaphores + mutex */
   isp_sem     = xSemaphoreCreateCountingStatic(1, 0, &isp_sem_buffer);     assert(isp_sem);
   disp.update = xSemaphoreCreateCountingStatic(1, 0, &disp.update_buffer); assert(disp.update);
   disp.lock   = xSemaphoreCreateMutexStatic(&disp.lock_buffer);             assert(disp.lock);
 
-  /* Global NPU mutex/guard */
   npu_guard_init();
 
-  /* ---- Bind FaceRec dedicated, non-aliased user IO buffers (in PSRAM) ---- */
   printf("[FR] user buffers: IN=%p (len=%lu)  OUT=%p (len=%lu)\r\n",
          (void*)g_fr_in_user,  (unsigned long)sizeof(g_fr_in_user),
          (void*)g_fr_out_user, (unsigned long)sizeof(g_fr_out_user));
@@ -1268,7 +1247,6 @@ void app_run()
            "falling back to internal buffers (shadow copy + cache ops remain).\r\n");
   }
 
-  /* Report actual buffers the runtime uses (internal or user) */
   const LL_Buffer_InfoTypeDef *chk_in  = LL_ATON_Input_Buffers_Info_face_recognition();
   const LL_Buffer_InfoTypeDef *chk_out = LL_ATON_Output_Buffers_Info_face_recognition();
   void *p_in  = LL_Buffer_addr_start(&chk_in [0]);
@@ -1278,25 +1256,35 @@ void app_run()
          (unsigned long)LL_Buffer_len(&chk_in [0]),
          (unsigned long)LL_Buffer_len(&chk_out[0]));
 
-
-
   if (p_in == p_out) {
     printf("[FR][WARN] IN and OUT alias at %p — this network was exported in-place; "
            "we’ll keep using shadow copy + strict cache discipline.\r\n", p_in);
   }
 
-  /* FR init after I/O handling */
   fr_init();
   printf("[FR][CFG] input=%dx%d, out=%d (from face_recognition.h)\r\n",
          FR_IN_W, FR_IN_H, FR_EMB_SIZE);
   fr_set_subject(FR_SUBJECT_NAME);
   fr_set_match_threshold(0.80f);
 
+  APP_Touch_Init();
+}
+
+
+
+void app_start_pipeline(void)
+{
+  printf("[APP] Starting camera and main pipeline threads...\r\n");
+
+  UBaseType_t isp_priority = FREERTOS_PRIORITY(2);
+  UBaseType_t pp_priority  = FREERTOS_PRIORITY(-2);
+  UBaseType_t dp_priority  = FREERTOS_PRIORITY(-2);
+  UBaseType_t nn_priority  = FREERTOS_PRIORITY(1);
+  TaskHandle_t hdl;
 
   /* Start LCD Display camera pipe stream */
   CAM_DisplayPipe_Start(lcd_bg_buffer[0], CMW_MODE_CONTINUOUS);
 
-  /* Threads */
   /* Threads */
   g_nn_task = xTaskCreateStatic(nn_thread_fct, "nn",
                                 configMINIMAL_STACK_SIZE * 2,
@@ -1304,7 +1292,6 @@ void app_run()
                                 nn_priority,
                                 nn_thread_stack, &nn_thread);
   assert(g_nn_task != NULL);
-
 
   hdl = xTaskCreateStatic(pp_thread_fct, "pp",
                           configMINIMAL_STACK_SIZE * 2,
@@ -1327,10 +1314,16 @@ void app_run()
                           isp_thread_stack, &isp_thread);
   assert(hdl != NULL);
 
-  APP_Touch_Init();
-  //APP_SleepMode_Init();
+  printf("[APP] Threads launched successfully.\r\n");
+}
 
 
+
+void app_run(void)
+{
+  /* Initialize all resources (LCD, buffers, queues, camera, etc.)
+     but do not start streaming or NN threads yet. */
+  app_init_pipeline();
 }
 
 
