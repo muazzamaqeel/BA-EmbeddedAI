@@ -4,8 +4,14 @@
 #include "stm32n6570_discovery_ts.h"
 #include "stm32n6570_discovery_lcd.h"
 #include <stdio.h>
+#include <stdbool.h>             // ✅ Add this line
 #include "app_ui_start.h"
-#include "app_ui_pin.h"   // <-- needed for PIN screen functions
+#include "app_ui_pin.h"          // <-- needed for PIN screen functions
+#include "app_sleepmode.h"       // ✅ Add this line
+
+#ifndef UTIL_LCD_COLOR_TRANSPARENT
+#define UTIL_LCD_COLOR_TRANSPARENT 0x0000u  /* ARGB4444 transparent */
+#endif
 
 /* --- Start button (bottom-right) --- */
 #define BTN_START_X   (800 - 240 - 20)  // 540
@@ -45,15 +51,17 @@ static void UI_DrawButton(int x, int y, int w, int h,
 
 void UI_StartScreen_Show(void)
 {
-    UTIL_LCD_SetLayer(0);
+    UTIL_LCD_SetLayer(1);              // Draw on UI overlay
     BSP_LCD_DisplayOn(0);
 
-    UI_DrawBackground();
+    UTIL_LCD_Clear(UTIL_LCD_COLOR_TRANSPARENT);
+    UI_DrawBackground();               // Background bitmap (still visible through transparency)
     UI_DrawButton(BTN_START_X, BTN_START_Y, BTN_START_W, BTN_START_H,
                   UTIL_LCD_COLOR_WHITE, "Start");
     UI_DrawButton(BTN_ADMIN_X, BTN_ADMIN_Y, BTN_ADMIN_W, BTN_ADMIN_H,
                   UTIL_LCD_COLOR_LIGHTGRAY, "Admin");
 }
+
 
 UI_ButtonResult UI_WaitForButton(void)
 {
@@ -65,32 +73,43 @@ UI_ButtonResult UI_WaitForButton(void)
             uint16_t tx = ts_state.TouchX;
             uint16_t ty = ts_state.TouchY;
 
+            /* -------------------- START button -------------------- */
             if (tx >= BTN_START_X && tx <= BTN_START_X + BTN_START_W &&
-                ty >= BTN_START_Y && ty <= BTN_START_Y + BTN_START_H) {
+                ty >= BTN_START_Y && ty <= BTN_START_Y + BTN_START_H)
+            {
                 printf("[UI] Start pressed!\r\n");
 
-                // Signal the pipeline task to start
+                /* Hide the entire Start screen before starting the pipeline */
+                BSP_LCD_SetLayerVisible(0, 1, DISABLE);               // (Instance=0, Layer=1)
+                UTIL_LCD_Clear(UTIL_LCD_COLOR_TRANSPARENT);           // clear residual pixels
+                UTIL_LCD_SetLayer(1);                                 // future UI still on layer 1
+                BSP_LCD_Reload(0, BSP_LCD_RELOAD_IMMEDIATE);          // apply visibility change immediately
+                HAL_Delay(100);                                       // ensure clean layer transition
+
+                /* Signal the pipeline to start */
                 extern void Pipeline_TriggerStart(void);
                 Pipeline_TriggerStart();
+
+                /* Enable sleep counter after start */
+                APP_SleepMode_EnableCounter(true);
 
                 return UI_BTN_START;
             }
 
-
-
+            /* -------------------- ADMIN button -------------------- */
             if (tx >= BTN_ADMIN_X && tx <= BTN_ADMIN_X + BTN_ADMIN_W &&
-                ty >= BTN_ADMIN_Y && ty <= BTN_ADMIN_Y + BTN_ADMIN_H) {
+                ty >= BTN_ADMIN_Y && ty <= BTN_ADMIN_Y + BTN_ADMIN_H)
+            {
                 printf("[UI] Admin pressed!\r\n");
 
-                // --- Show PIN screen directly ---
                 UI_PinScreen_Show();
                 UI_PinScreen_WaitForOK();
 
                 printf("[UI] PIN screen finished, returning to start menu...\r\n");
-
                 return UI_BTN_ADMIN;
             }
         }
         HAL_Delay(50);
     }
 }
+

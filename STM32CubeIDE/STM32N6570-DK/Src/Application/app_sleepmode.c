@@ -26,6 +26,9 @@ static bool touch_detected_since_last_sleep = false;
 /* --- NEW: override flag --- */
 static volatile bool g_sleep_disabled_override = false;
 
+/* --- NEW: counter enable flag (only active after Start button pressed) --- */
+static volatile bool g_sleep_counter_enabled = false;
+
 static void SleepMode_Task(void *arg);
 static void enter_sleep(void);
 static void exit_sleep(void);
@@ -77,9 +80,20 @@ void APP_SleepMode_Enable(void)
     printf("[SLEEP] Override cleared — sleep enabled\r\n");
 }
 
+/* --- NEW: enable/disable counter --- */
+void APP_SleepMode_EnableCounter(bool enable)
+{
+    g_sleep_counter_enabled = enable;
+    printf("[SLEEP] Counter %s\r\n", enable ? "ENABLED" : "DISABLED");
+}
+
 /* Called from detector display/update code */
 void APP_SleepMode_UpdateFaceActivity(bool face_detected)
 {
+    /* Skip updates if counter is not active yet */
+    if (!g_sleep_counter_enabled)
+        return;
+
     if (face_detected) {
         g_last_face_time = HAL_GetTick();
         touch_detected_since_last_sleep = false;  // Reset touch flag if face detected
@@ -87,41 +101,50 @@ void APP_SleepMode_UpdateFaceActivity(bool face_detected)
 }
 
 /* ===== Task ===== */
+static const uint32_t WAKE_GRACE_MS = 1500;   // ignore sleep/touch flapping right after wake
+
 static void SleepMode_Task(void *arg)
 {
     (void)arg;
     TS_State_t ts;
     bool face_present_now = false;
+    static bool prev_touch = false;  // edge detect
 
     while (1) {
-        /* --- NEW: skip sleep logic if override is active --- */
-        if (g_sleep_disabled_override) {
-            vTaskDelay(pdMS_TO_TICKS(200));
+        if (!g_sleep_counter_enabled) { vTaskDelay(pdMS_TO_TICKS(500)); continue; }
+
+        // Global override
+        if (g_sleep_disabled_override) { vTaskDelay(pdMS_TO_TICKS(200)); continue; }
+
+        // During grace window after wake: don't consider sleep or touch
+        if (!g_sleep_active && (HAL_GetTick() - g_wake_time) < WAKE_GRACE_MS) {
+            prev_touch = false; // reset edge
+            vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
 
         if (!g_sleep_active) {
-            // Check if a face is currently present (last update < 500ms ago)
             face_present_now = (HAL_GetTick() - g_last_face_time) < 500;
 
             if (!face_present_now) {
-                // No face → start countdown
-                if ((HAL_GetTick() - g_last_face_time) > 7000 &&
-                    !touch_detected_since_last_sleep) {
+                // Only allow re-sleep if we haven’t seen a *new* touch since last sleep.
+                if ((HAL_GetTick() - g_last_face_time) > 7000 && !touch_detected_since_last_sleep) {
                     enter_sleep();
+                    prev_touch = false;  // reset edge detector on entry
                 }
             }
-            // else: face present → block sleep completely
         } else {
-            // Exit sleep only by touch
-            if (BSP_TS_GetState(0, &ts) == BSP_ERROR_NONE && ts.TouchDetected) {
-                if (!touch_detected_since_last_sleep) {
-                    touch_detected_since_last_sleep = true;
+            // In sleep: wake on rising edge only (debounce)
+            if (BSP_TS_GetState(0, &ts) == BSP_ERROR_NONE) {
+                bool edge = (ts.TouchDetected && !prev_touch);
+                prev_touch = ts.TouchDetected;
+                if (edge && !touch_detected_since_last_sleep) {
+                    touch_detected_since_last_sleep = true;  // remember the *reason* we woke
                     exit_sleep();
                 }
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(40));
     }
 }
 
@@ -151,11 +174,18 @@ static void exit_sleep(void)
     LCD_Backlight_On();      // backlight GPIO on
     UTIL_LCD_Clear(UTIL_LCD_COLOR_BLACK);
 
+    // Resume camera first
     CMW_CAMERA_Resume(DCMIPP_PIPE1);
     CMW_CAMERA_Resume(DCMIPP_PIPE2);
 
-    // Reset flags and timers after exiting sleep mode
-    g_last_face_time = HAL_GetTick();  // Reset face detection timer
-    g_wake_time = g_last_face_time;   // Mark the wake time
-    touch_detected_since_last_sleep = false;  // Reset touch flag
+    // --- NEW: allow sensor and ISP to re-stabilize ---
+    HAL_Delay(600);   // 0.6 s is typically enough for IMX335 AE/AWB to settle
+
+    // --- NEW: clear any stale face detection buffers ---
+    //extern void Pipeline_ResetDetection(void);
+    //Pipeline_ResetDetection();
+
+    g_last_face_time = HAL_GetTick();
+    g_wake_time = g_last_face_time;
+    touch_detected_since_last_sleep = false;
 }
