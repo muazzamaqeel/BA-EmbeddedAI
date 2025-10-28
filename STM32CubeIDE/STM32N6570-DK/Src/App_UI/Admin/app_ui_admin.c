@@ -5,8 +5,9 @@
 #include "stm32n6570_discovery_lcd.h"
 #include <stdio.h>
 #include <stdbool.h>
-#include "app_ui_admin.h"   // ✅ includes the enum and prototype
+#include "app_ui_admin.h"
 #include "app_change_pin.h"
+#include "app_change_face.h"   // ✅ include face-change UI
 
 /* --- Address of Admin background image in NOR Flash --- */
 #define ADMIN_BG_ADDR   ((uint32_t)0x778A0000)
@@ -45,31 +46,57 @@ AdminResult UI_AdminScreen_Show(void)
                 uint16_t tx = ts_state.TouchX;
                 uint16_t ty = ts_state.TouchY;
 
+                /* ==============================
+                 * Button 1 → Change PIN
+                 * ============================== */
                 if (tx >= BTN1_X && tx <= BTN1_X + BTN1_W &&
-                    ty >= BTN1_Y && ty <= BTN1_Y + BTN1_H) {
-
+                    ty >= BTN1_Y && ty <= BTN1_Y + BTN1_H)
+                {
                     printf("[UI] Admin Button1 pressed (Change PIN)\r\n");
                     CP_Result res = UI_ChangePinScreen_Show();
 
                     if (res == CP_RESULT_BACK_TO_START) {
                         printf("[UI] Returning to Start screen after PIN change\r\n");
-                        // clear touch
                         for (int i = 0; i < 10; i++) {
                             BSP_TS_GetState(0, &ts_state);
                             if (!ts_state.TouchDetected) break;
                             HAL_Delay(50);
                         }
-                        return ADMIN_RESULT_BACK_TO_START;   // ✅ back to Start
+                        return ADMIN_RESULT_BACK_TO_START;   // back to Start
                     } else {
                         UI_Admin_DrawBackground();
                         return ADMIN_RESULT_STAY;
                     }
                 }
+
+                /* ==============================
+                 * Button 2 → Change Face
+                 * ============================== */
+                /* ==============================
+                 * Button 2 → Change Face
+                 * ============================== */
+                /* ==============================
+                 * Button 2 → Change Face
+                 * ============================== */
                 else if (tx >= BTN2_X && tx <= BTN2_X + BTN2_W &&
-                         ty >= BTN2_Y && ty <= BTN2_Y + BTN2_H) {
-                    printf("[UI] Admin Button2 pressed\r\n");
-                    return ADMIN_RESULT_STAY;
+                         ty >= BTN2_Y && ty <= BTN2_Y + BTN2_H)
+                {
+                    printf("[UI] Admin Button2 pressed (Change Face)\r\n");
+
+                    /* --- Show Change-Face window --- */
+                    UI_TestPassed_Show();  // ✅ stays on that screen
+
+                    /* Stop the Admin screen loop — do NOT return to Start or Admin */
+                    printf("[UI] Change Face screen active — staying in this window.\r\n");
+
+                    /* Permanently remain on this screen (no return to Start/Admin) */
+                    while (1)
+                    {
+                        HAL_Delay(1000);
+                    }
                 }
+
+
             }
             else if (!ts_state.TouchDetected) {
                 touch_active = false;
