@@ -12,11 +12,16 @@
 #include "stm32n6570_discovery_ts.h"
 #include "stm32n6570_discovery_sd.h"
 #include "app_sleepmode.h"
-#include "app_ui_start.h"       // ✅ to call UI_StartScreen_Show()
+#include "app_ui_start.h"
 #include "fatfs.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+
+#ifndef UTIL_LCD_COLOR_TRANSPARENT
+#define UTIL_LCD_COLOR_TRANSPARENT 0x0000u
+#endif
+
 
 /* ===== Layout constants ===== */
 #define FACES_DIR_PATH      "0:faces"
@@ -272,20 +277,22 @@ void UI_TestPassed_Show(void)
                     else if (tx >= 120 + BUTTON_W + BUTTON_GAP &&
                              tx <= 120 + BUTTON_W + BUTTON_GAP + BUTTON_W)
                     {
-                        printf("[UI] BACK pressed → returning to Start screen\r\n");
+                        printf("[UI] BACK pressed → returning to caller\r\n");
 
-                        /* --- Clean transition back to Start --- */
-                        UTIL_LCD_Clear(UTIL_LCD_COLOR_WHITE);
+                        /* --- Clean up overlay and ensure L1 is usable by caller --- */
+                        UTIL_LCD_SetLayer(1);
+                        UTIL_LCD_Clear(UTIL_LCD_COLOR_TRANSPARENT);
+                        BSP_LCD_SetLayerVisible(0, 1, ENABLE);
                         BSP_LCD_Reload(0, BSP_LCD_RELOAD_IMMEDIATE);
-                        HAL_Delay(100);
 
-                        /* Draw Start screen */
-                        UI_StartScreen_Show();
+                        /* If you disabled sleep on entry, re-enable it now */
+                        // APP_SleepMode_Enable();  // <- use your real re-enable call if available
 
-                        /* Reactivate Start/Admin button detection */
-                        UI_WaitForButton();   // ✅ Re-enable touch handling
-                        return;               // ✅ Fully exit Face Management
+                        /* IMPORTANT: Do NOT call UI_StartScreen_Show() or UI_WaitForButton() here.
+                           Just return and let the caller (Admin/FSM) decide. */
+                        return;
                     }
+
                 }
             }
             else if (!ts.TouchDetected)

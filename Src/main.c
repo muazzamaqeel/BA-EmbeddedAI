@@ -51,6 +51,9 @@
 #include "app_sleepmode.h"
 #include "usb_embeddings.h"
 #include "app_ui_admin.h"
+#include "ui_fsm.h"
+#include "fatfs.h"                      // declares MX_FATFS_Init()
+#include "stm32n6570_discovery_sd.h"    // declares BSP_SD_Init(...)  (name may be *_sd.h or *_mmc.h on your BSP)
 
 UART_HandleTypeDef huart1;
 
@@ -147,57 +150,25 @@ if (XSPI_NOR_Map_Once() != 0) {
   BSP_SD_Init(0);      // low-level SD init
   MX_FATFS_Init();     // initialize FatFs stack
   USB_SD_Test();       // mount + read embeddings files
-
   printf("[MAIN] SD card check completed.\r\n\r\n");
 
-
   /* ======================================================
-   * MAIN UI LOOP — behaves like original version
+   * MAIN UI via FSM (no extra task)
    * ====================================================== */
   printf("[MAIN] Initializing base application...\r\n");
-  app_run();                 // <-- only initialization (no threads yet)
-  APP_SleepMode_Init();      // prepare sleep system early if needed
+  app_run();                 // init your app (no threads yet)
+  APP_SleepMode_Init();      // prepare sleep system
 
-  printf("[MAIN] Starting UI navigation loop...\r\n");
+  printf("[MAIN] Running UI FSM (blocking until pipeline starts)...\r\n");
+  UI_FSM_Init();
+  UI_FSM_Run();              // blocks in UI loop; returns after Start → pipeline launched
 
-  while (1)
-  {
-      // --- Show Start screen ---
-      UI_StartScreen_Show();
-      UI_ButtonResult res = UI_WaitForButton();
-
-      if (res == UI_BTN_START)
-      {
-          printf("[MAIN] Start button pressed → launching camera pipeline...\r\n");
-          app_start_pipeline();   // <-- start camera + NN + display threads
-          break;                  // leave loop → main system runs
-      }
-      else if (res == UI_BTN_ADMIN)
-      {
-          printf("[MAIN] Admin pressed → opening admin screen...\r\n");
-          AdminResult adminRes = UI_AdminScreen_Show();
-
-          if (adminRes == ADMIN_RESULT_BACK_TO_START)
-          {
-              printf("[MAIN] Admin returned → back to Start screen\r\n");
-              continue;  // re-show start screen
-          }
-          else
-          {
-              printf("[MAIN] Staying in Admin\r\n");
-          }
-      }
-  }
-
-
-
-
+  /* Once the FSM returns, pipeline tasks are running; end this thread */
   vTaskDelete(NULL);
 
 }
 
 
-/* Allow to debug with cache enable */
 __attribute__ ((section (".keep_me"))) void app_clean_invalidate_dbg()
 {
   SCB_CleanInvalidateDCache();

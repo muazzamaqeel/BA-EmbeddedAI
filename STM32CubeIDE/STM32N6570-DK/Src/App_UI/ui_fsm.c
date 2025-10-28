@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    ui_fsm.c
- * @brief   Finite State Machine for STM32 UI screens
+ * @brief   Finite State Machine for STM32 UI screens (FreeRTOS-friendly)
  ******************************************************************************
  */
 
@@ -10,12 +10,22 @@
 #include "app_ui_pin.h"
 #include "app_ui_admin.h"
 #include "app_change_pin.h"
-#include "app_ui_pin_face_rec.h"
-#include "pipeline_start.h"
+#include "pipeline_start.h"     // app_start_pipeline()
 #include "app_sleepmode.h"
 #include <stdio.h>
 #include "FreeRTOS.h"
 #include "task.h"
+
+/* --- If these enums/typedefs are elsewhere, include the right header instead --- */
+#ifndef UI_State
+typedef enum {
+    UI_STATE_START = 0,
+    UI_STATE_PIN,
+    UI_STATE_ADMIN,
+    UI_STATE_CHANGE_PIN,
+    UI_STATE_FACE_REC
+} UI_State;
+#endif
 
 /* Current UI state */
 static UI_State currentState;
@@ -27,7 +37,7 @@ void UI_FSM_Init(void)
     printf("[FSM] Initialized at START state\r\n");
 }
 
-/* Run FSM loop forever */
+/* Blocking runner: when Start is pressed and pipeline is launched, this RETURNS. */
 void UI_FSM_Run(void)
 {
     while (1)
@@ -49,37 +59,22 @@ void UI_FSM_Run(void)
                 }
                 else if (btn == UI_BTN_ADMIN)
                 {
-                    printf("[FSM] EVENT: Admin pressed → PIN\r\n");
-                    currentState = UI_STATE_PIN;
+                    printf("[FSM] EVENT: Admin pressed → ADMIN\r\n");
+                    currentState = UI_STATE_ADMIN;
                 }
                 break;
             }
 
             /* =======================================================
-             *  ADMIN PIN ENTRY SCREEN
-             * ======================================================= */
-            case UI_STATE_PIN:
-            {
-                UI_PinScreen_Show();
-                UI_PinScreen_WaitForOK();
-                printf("[FSM] EVENT: PIN accepted → ADMIN\r\n");
-                currentState = UI_STATE_ADMIN;
-                break;
-            }
-
-            /* =======================================================
-             *  ADMIN SCREEN
+             *  ADMIN SCREEN (handles its own sub-screens like Change PIN)
              * ======================================================= */
             case UI_STATE_ADMIN:
             {
-                UI_AdminScreen_Show();
-                printf("[FSM] Admin screen active\r\n");
-
-                /* When Change PIN returns, go back to START */
-                CP_Result res = UI_ChangePinScreen_Show();
-                if (res == CP_RESULT_BACK_TO_START)
+                printf("[FSM] Admin screen opening...\r\n");
+                AdminResult adminRes = UI_AdminScreen_Show();
+                if (adminRes == ADMIN_RESULT_BACK_TO_START)
                 {
-                    printf("[FSM] EVENT: Back to START after PIN change\r\n");
+                    printf("[FSM] EVENT: Admin → START\r\n");
                     currentState = UI_STATE_START;
                 }
                 else
@@ -90,7 +85,7 @@ void UI_FSM_Run(void)
             }
 
             /* =======================================================
-             *  CHANGE PIN SCREEN (explicit if needed)
+             *  (Optional) CHANGE PIN explicit state if you need it
              * ======================================================= */
             case UI_STATE_CHANGE_PIN:
             {
@@ -109,14 +104,17 @@ void UI_FSM_Run(void)
             case UI_STATE_FACE_REC:
             {
                 printf("[FSM] EVENT: Launching application pipeline...\r\n");
-                Start_ApplicationTasks();     // your main face recognition pipeline
-                APP_SleepMode_Init();         // enable sleep management
-                currentState = UI_STATE_START;
-                break;
+                app_start_pipeline();   // starts camera/NN/display tasks
+
+                /* IMPORTANT:
+                   If UI_FSM_Run() is called from main_thread_fct(), do NOT delete the task here.
+                   Simply return so main_thread_fct() can cleanly end (vTaskDelete(NULL) there). */
+                printf("[FSM] Pipeline started. Returning from UI_FSM_Run().\r\n");
+                return;  // <-- key change
             }
 
             /* =======================================================
-             *  FALLBACK STATE
+             *  FALLBACK
              * ======================================================= */
             default:
                 printf("[FSM] Invalid state. Resetting to START.\r\n");
@@ -126,4 +124,12 @@ void UI_FSM_Run(void)
 
         vTaskDelay(pdMS_TO_TICKS(50));  // let FreeRTOS breathe
     }
+}
+
+/* Optional FreeRTOS task wrapper (only if you ever want a separate UI task) */
+void UI_FSM_Task(void *arg)
+{
+    (void)arg;
+    UI_FSM_Run();   // blocks until pipeline starts
+    vTaskDelete(NULL);  // safe here because this is a dedicated UI task
 }

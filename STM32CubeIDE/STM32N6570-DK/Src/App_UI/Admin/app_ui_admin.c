@@ -83,18 +83,26 @@ AdminResult UI_AdminScreen_Show(void)
                 {
                     printf("[UI] Admin Button2 pressed (Change Face)\r\n");
 
-                    /* --- Show Change-Face window --- */
-                    UI_TestPassed_Show();  // ✅ stays on that screen
+                    /* Show Change-Face window (leaf screen). It returns when user presses BACK. */
+                    UI_TestPassed_Show();
 
-                    /* Stop the Admin screen loop — do NOT return to Start or Admin */
-                    printf("[UI] Change Face screen active — staying in this window.\r\n");
-
-                    /* Permanently remain on this screen (no return to Start/Admin) */
-                    while (1)
-                    {
-                        HAL_Delay(1000);
+                    /* Debounce: drain any lingering touch */
+                    for (int i = 0; i < 10; i++) {
+                        BSP_TS_GetState(0, &ts_state);
+                        if (!ts_state.TouchDetected) break;
+                        HAL_Delay(50);
                     }
+
+                    /* Decide where to go next:
+                       - If you want to return to START: */
+                    return ADMIN_RESULT_BACK_TO_START;
+
+                    /* Or, if you prefer to stay in Admin instead, uncomment this:
+                    UI_Admin_DrawBackground();
+                    return ADMIN_RESULT_STAY;
+                    */
                 }
+
 
 
             }

@@ -51,11 +51,15 @@ static void UI_DrawButton(int x, int y, int w, int h,
 
 void UI_StartScreen_Show(void)
 {
-    UTIL_LCD_SetLayer(1);              // Draw on UI overlay
+    UTIL_LCD_SetLayer(1);
     BSP_LCD_DisplayOn(0);
 
+    /* Ensure overlay layer is actually visible */
+    BSP_LCD_SetLayerVisible(0, 1, ENABLE);
+    BSP_LCD_Reload(0, BSP_LCD_RELOAD_IMMEDIATE);
+
     UTIL_LCD_Clear(UTIL_LCD_COLOR_TRANSPARENT);
-    UI_DrawBackground();               // Background bitmap (still visible through transparency)
+    UI_DrawBackground();              // Background bitmap (still visible through transparency)
     UI_DrawButton(BTN_START_X, BTN_START_Y, BTN_START_W, BTN_START_H,
                   UTIL_LCD_COLOR_WHITE, "Start");
     UI_DrawButton(BTN_ADMIN_X, BTN_ADMIN_Y, BTN_ADMIN_W, BTN_ADMIN_H,
