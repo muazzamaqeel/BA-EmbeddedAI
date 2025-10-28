@@ -12,6 +12,7 @@
 #include "stm32n6570_discovery_ts.h"
 #include "stm32n6570_discovery_sd.h"
 #include "app_sleepmode.h"
+#include "app_ui_start.h"       // ✅ to call UI_StartScreen_Show()
 #include "fatfs.h"
 #include <stdio.h>
 #include <string.h>
@@ -25,14 +26,14 @@
 #define SCREEN_W            800
 #define SCREEN_H            480
 
-#define ROW_HEIGHT          48          // taller rows
+#define ROW_HEIGHT          48
 #define TABLE_TOP_Y         70
-#define CHECKBOX_SIZE       30          // larger checkbox
+#define CHECKBOX_SIZE       30
 #define TABLE_MARGIN_X      40
 #define BUTTON_W            260
 #define BUTTON_H            55
 #define BUTTON_GAP          100
-#define BUTTON_Y            (SCREEN_H - BUTTON_H - 20)
+#define BUTTON_Y            (SCREEN_H - BUTTON_H - 25)
 
 /* ===== Globals ===== */
 static FATFS g_fs;
@@ -119,6 +120,24 @@ static void ReadUserListFromSD(void)
 }
 
 /* ===== Drawing ===== */
+static void DrawButtonRounded(int x, int y, int w, int h, uint32_t color, const char *label)
+{
+    UTIL_LCD_SetTextColor(color);
+    UTIL_LCD_FillRect(x, y, w, h, color);
+
+    /* Border */
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_DrawRect(x, y, w, h, UTIL_LCD_COLOR_BLACK);
+
+    /* Text centered */
+    UTIL_LCD_SetBackColor(color);
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_SetFont(&Font20);
+
+    int text_y = y + (h / 2) - (Font20.Height / 2);
+    UTIL_LCD_DisplayStringAt(x, text_y, (uint8_t*)label, CENTER_MODE);
+}
+
 static void DrawFaceTable(void)
 {
     UTIL_LCD_SetLayer(1);
@@ -134,7 +153,6 @@ static void DrawFaceTable(void)
     int y = TABLE_TOP_Y;
     for (int i = 0; i < g_user_count; i++)
     {
-        /* Checkbox */
         uint16_t box_x = TABLE_MARGIN_X;
         uint16_t box_y = y + (ROW_HEIGHT - CHECKBOX_SIZE) / 2;
         UTIL_LCD_DrawRect(box_x, box_y, CHECKBOX_SIZE, CHECKBOX_SIZE, UTIL_LCD_COLOR_BLACK);
@@ -146,10 +164,7 @@ static void DrawFaceTable(void)
             UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
         }
 
-        /* Username */
         UTIL_LCD_DisplayStringAt(box_x + CHECKBOX_SIZE + 20, y + 10, (uint8_t*)g_usernames[i], LEFT_MODE);
-
-        /* Row separator */
         UTIL_LCD_DrawHLine(TABLE_MARGIN_X, y + ROW_HEIGHT, SCREEN_W - 2 * TABLE_MARGIN_X, UTIL_LCD_COLOR_GRAY);
         y += ROW_HEIGHT + 2;
     }
@@ -165,19 +180,8 @@ static void DrawButtons(void)
     int x_delete = 120;
     int x_back   = x_delete + BUTTON_W + BUTTON_GAP;
 
-    /* DELETE SELECTED */
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_LIGHTGRAY);
-    UTIL_LCD_FillRect(x_delete, BUTTON_Y, BUTTON_W, BUTTON_H, UTIL_LCD_COLOR_LIGHTGRAY);
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_DrawRect(x_delete, BUTTON_Y, BUTTON_W, BUTTON_H, UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_DisplayStringAt(x_delete + 50, BUTTON_Y + 15, (uint8_t*)"DELETE SELECTED", LEFT_MODE);
-
-    /* BACK */
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_LIGHTGRAY);
-    UTIL_LCD_FillRect(x_back, BUTTON_Y, BUTTON_W, BUTTON_H, UTIL_LCD_COLOR_LIGHTGRAY);
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_DrawRect(x_back, BUTTON_Y, BUTTON_W, BUTTON_H, UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_DisplayStringAt(x_back + 100, BUTTON_Y + 15, (uint8_t*)"BACK", LEFT_MODE);
+    DrawButtonRounded(x_delete, BUTTON_Y, BUTTON_W, BUTTON_H, UTIL_LCD_COLOR_LIGHTGRAY, "DELETE SELECTED");
+    DrawButtonRounded(x_back,   BUTTON_Y, BUTTON_W, BUTTON_H, UTIL_LCD_COLOR_LIGHTGRAY, "BACK");
 }
 
 /* ===== Touch logic ===== */
@@ -225,9 +229,10 @@ static void DeleteSelectedUsers(void)
     char msg[64];
     snprintf(msg, sizeof(msg), "Deleted %d file(s)", deleted);
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_DARKGREEN);
-    UTIL_LCD_DisplayStringAt(0, BUTTON_Y - 30, (uint8_t*)msg, CENTER_MODE);
+    UTIL_LCD_DisplayStringAt(0, BUTTON_Y - 35, (uint8_t*)msg, CENTER_MODE);
 }
 
+/* ===== Main function ===== */
 /* ===== Main function ===== */
 void UI_TestPassed_Show(void)
 {
@@ -253,10 +258,10 @@ void UI_TestPassed_Show(void)
                 uint16_t tx = ts.TouchX;
                 uint16_t ty = ts.TouchY;
 
-                /* Check row touches */
+                /* Checkbox / row selection */
                 ToggleSelection(tx, ty);
 
-                /* Button region */
+                /* Buttons */
                 if (ty >= BUTTON_Y && ty <= BUTTON_Y + BUTTON_H)
                 {
                     if (tx >= 120 && tx <= 120 + BUTTON_W)
@@ -267,8 +272,19 @@ void UI_TestPassed_Show(void)
                     else if (tx >= 120 + BUTTON_W + BUTTON_GAP &&
                              tx <= 120 + BUTTON_W + BUTTON_GAP + BUTTON_W)
                     {
-                        printf("[UI] BACK pressed\r\n");
-                        return;
+                        printf("[UI] BACK pressed → returning to Start screen\r\n");
+
+                        /* --- Clean transition back to Start --- */
+                        UTIL_LCD_Clear(UTIL_LCD_COLOR_WHITE);
+                        BSP_LCD_Reload(0, BSP_LCD_RELOAD_IMMEDIATE);
+                        HAL_Delay(100);
+
+                        /* Draw Start screen */
+                        UI_StartScreen_Show();
+
+                        /* Reactivate Start/Admin button detection */
+                        UI_WaitForButton();   // ✅ Re-enable touch handling
+                        return;               // ✅ Fully exit Face Management
                     }
                 }
             }
@@ -278,3 +294,4 @@ void UI_TestPassed_Show(void)
         HAL_Delay(80);
     }
 }
+
