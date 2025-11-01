@@ -1,0 +1,78 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0" version="28.2.8">
+  <diagram name="Page-1" id="qa9C8Mb12-_dTvcWoWLw">
+    <mxGraphModel dx="234" dy="122" grid="0" gridSize="10" guides="0" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="WRZcr9ZRGiPU4vvSH75i-1" target="WRZcr9ZRGiPU4vvSH75i-2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="WRZcr9ZRGiPU4vvSH75i-1" target="WRZcr9ZRGiPU4vvSH75i-3">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="406" y="240" />
+              <mxPoint x="512" y="240" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-1" value="Start Screen" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDEDED;" vertex="1" parent="1">
+          <mxGeometry x="333" y="130" width="145" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="WRZcr9ZRGiPU4vvSH75i-2" target="WRZcr9ZRGiPU4vvSH75i-4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="WRZcr9ZRGiPU4vvSH75i-2" target="WRZcr9ZRGiPU4vvSH75i-9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-2" value="Admin Screen" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDEDED;" vertex="1" parent="1">
+          <mxGeometry x="243" y="290" width="145" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="WRZcr9ZRGiPU4vvSH75i-3" target="WRZcr9ZRGiPU4vvSH75i-12">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-3" value="AI Application&amp;nbsp;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDEDED;" vertex="1" parent="1">
+          <mxGeometry x="439" y="291" width="145" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-21" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="WRZcr9ZRGiPU4vvSH75i-4" target="WRZcr9ZRGiPU4vvSH75i-1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="250" y="518" />
+              <mxPoint x="94" y="518" />
+              <mxPoint x="94" y="160" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-4" value="Face Change Screen Screen" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDEDED;" vertex="1" parent="1">
+          <mxGeometry x="174" y="428" width="145" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-22" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="WRZcr9ZRGiPU4vvSH75i-9" target="WRZcr9ZRGiPU4vvSH75i-1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="416" y="518" />
+              <mxPoint x="93" y="518" />
+              <mxPoint x="93" y="160" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-9" value="Admin PIN Change Screen" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDEDED;" vertex="1" parent="1">
+          <mxGeometry x="346" y="428" width="145" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-12" value="PIN Mode Screen" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDEDED;" vertex="1" parent="1">
+          <mxGeometry x="520" y="429" width="145" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-25" value="" style="ellipse;html=1;shape=endState;fillColor=strokeColor;" vertex="1" parent="1">
+          <mxGeometry x="577" y="530" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-27" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="WRZcr9ZRGiPU4vvSH75i-26" target="WRZcr9ZRGiPU4vvSH75i-1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-26" value="" style="ellipse;fillColor=strokeColor;html=1;" vertex="1" parent="1">
+          <mxGeometry x="391" y="30" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="WRZcr9ZRGiPU4vvSH75i-29" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="WRZcr9ZRGiPU4vvSH75i-12" target="WRZcr9ZRGiPU4vvSH75i-25">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
