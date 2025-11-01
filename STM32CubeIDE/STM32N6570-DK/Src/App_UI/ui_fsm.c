@@ -122,7 +122,7 @@ void UI_FSM_Run(void)
                 break;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(50));  // let FreeRTOS breathe
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
