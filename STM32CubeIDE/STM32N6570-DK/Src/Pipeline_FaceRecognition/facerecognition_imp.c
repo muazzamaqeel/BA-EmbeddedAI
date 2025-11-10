@@ -593,6 +593,11 @@ void pp_thread_fct(void *arg)
 
   /* Identity lock */
   static id_lock_t lock = {{0}, 0.0f, 0, 0};
+  /* ---- Anti-retrigger (PIN gating) ---- */
+  static volatile bool g_pin_session_active = false;
+  static uint32_t      g_last_unlock_ms     = 0;
+  static int           g_stable_count       = 0;
+  static char          last_name[32]        = {0};
 
   while (1)
   {
@@ -911,10 +916,33 @@ void pp_thread_fct(void *arg)
       /* Log result + Top-K */
       printf("[FR] match: %s  cos=%.3f  (dt=%lums)\r\n", final_name, final_s, (unsigned long)dt);
 
-      if (strcmp(final_name, "Unknown") != 0 && final_s >= FR_THR_ON) {
+      /* ---- PIN unlock gating ---- */
+      const uint32_t now_ms = HAL_GetTick();
+      const uint32_t PIN_COOLDOWN_MS = 3000;      // 3-second cooldown
+      const int      STABLE_FRAMES_REQUIRED = 3;  // Require 3 consecutive stable frames
+
+      // Track consecutive frames with same name and above threshold
+      if (strcmp(final_name, last_name) == 0 && final_s >= FR_THR_ON) {
+          g_stable_count++;
+          printf("[FR][Stable] %s %d/%d\r\n", final_name, g_stable_count, STABLE_FRAMES_REQUIRED);
+      } else {
+          g_stable_count = 0;
+          strncpy(last_name, final_name, sizeof(last_name));
+      }
+
+      // Trigger only if all conditions are met
+      if (!g_pin_session_active &&
+          strcmp(final_name, "Unknown") != 0 &&
+          final_s >= FR_THR_ON &&
+          g_stable_count >= STABLE_FRAMES_REQUIRED &&
+          (now_ms - g_last_unlock_ms) > PIN_COOLDOWN_MS)
+      {
+          g_pin_session_active = true;
+          g_stable_count = 0;
+          g_last_unlock_ms = now_ms;
+
           printf("[UI] Launching PIN screen for %s...\r\n", final_name);
 
-          // --- Decrypt corresponding PIN file ---
           if (!FR_LoadAndDecryptPinForName("0:pin", final_name)) {
               printf("[UI][ERR] No PIN file for %s, skipping PIN screen.\r\n", final_name);
           } else {
@@ -924,7 +952,11 @@ void pp_thread_fct(void *arg)
           }
 
           printf("[UI] PIN screen done, resuming pipeline...\r\n");
+
+          g_pin_session_active = false;
+          g_last_unlock_ms = HAL_GetTick();  // Reset cooldown timer
       }
+
 
 
 #if DBG_PRINT_TOPK
