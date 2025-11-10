@@ -22,5 +22,6 @@
 
 void app_run(void);
 uint8_t *APP_GetLcdBgBuffer0(void);
+void APP_FaceDetection_Reset(void);
 
 #endif

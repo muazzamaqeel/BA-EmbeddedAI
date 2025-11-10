@@ -173,6 +173,7 @@ void UI_FR_PinScreen_WaitForOK(void)
                             if (strcmp(fr_pin_buffer, g_current_pin) == 0) {
                                 printf("[UI-FR] Correct PIN entered!\r\n");
                                 APP_SleepMode_Enable();
+                                APP_FaceDetection_Reset();
                                 return;
                             } else {
                                 printf("[UI-FR] Wrong PIN!\r\n");

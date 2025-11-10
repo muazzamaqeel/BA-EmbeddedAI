@@ -1383,3 +1383,28 @@ int CMW_CAMERA_PIPE_VsyncEventCallback(uint32_t pipe)
 
   return HAL_OK;
 }
+
+
+
+void APP_FaceDetection_Reset(void)
+{
+    printf("[APP] Face Detection reset requested (after PIN unlock)\r\n");
+
+    // Clear overlay label + LCD
+    g_fr_overlay_label[0] = '\0';
+    UTIL_LCD_SetLayer(SCRL_LAYER_1);
+    UTIL_LCD_Clear(UTIL_LCD_COLOR_TRANSPARENT);
+
+#ifdef TRACKER_MODULE
+    TRK_Init();   // optional: clear tracker state
+#endif
+
+    // Re-enable pipeline without restarting camera
+    APP_SleepMode_Disable();
+
+    // Wake up NN and display threads (they auto-continue next frame)
+    xTaskNotifyGive(g_nn_task);
+
+    printf("[APP] Detection pipeline resumed without camera restart.\r\n");
+}
+
