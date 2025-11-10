@@ -22,6 +22,10 @@
 #define UTIL_LCD_COLOR_TRANSPARENT 0x0000u
 #endif
 
+#ifndef UTIL_LCD_COLOR_DARKGRAY
+#define UTIL_LCD_COLOR_DARKGRAY 0x7BEF
+#endif
+
 
 /* ===== Layout constants ===== */
 #define FACES_DIR_PATH      "0:faces"
@@ -62,9 +66,9 @@ static bool EnsureSDPresent(void)
     {
         UTIL_LCD_SetLayer(1);
         BSP_LCD_DisplayOn(0);
-        UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
-        UTIL_LCD_Clear(UTIL_LCD_COLOR_WHITE);
-        UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_RED);
+        UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_DARKGRAY);
+        UTIL_LCD_Clear(UTIL_LCD_COLOR_DARKGRAY);
+        UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
         UTIL_LCD_SetFont(&Font24);
         UTIL_LCD_DisplayStringAt(0, 220, (uint8_t*)"No SD card found", CENTER_MODE);
         printf("[UI] No SD card detected ❌\r\n");
@@ -127,29 +131,33 @@ static void ReadUserListFromSD(void)
 /* ===== Drawing ===== */
 static void DrawButtonRounded(int x, int y, int w, int h, uint32_t color, const char *label)
 {
-    UTIL_LCD_SetTextColor(color);
-    UTIL_LCD_FillRect(x, y, w, h, color);
-
-    /* Border */
+    /* Button background (black) */
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_DrawRect(x, y, w, h, UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_FillRect(x, y, w, h, UTIL_LCD_COLOR_BLACK);
 
-    /* Text centered */
-    UTIL_LCD_SetBackColor(color);
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
+    /* Border (white) */
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_DrawRect(x, y, w, h, UTIL_LCD_COLOR_WHITE);
+
+    /* Text (white on black) */
+    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_SetFont(&Font20);
 
     int text_y = y + (h / 2) - (Font20.Height / 2);
     UTIL_LCD_DisplayStringAt(x, text_y, (uint8_t*)label, CENTER_MODE);
 }
 
+
 static void DrawFaceTable(void)
 {
     UTIL_LCD_SetLayer(1);
     BSP_LCD_DisplayOn(0);
-    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_Clear(UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_DARKGRAY);
+    UTIL_LCD_Clear(UTIL_LCD_COLOR_DARKGRAY);
+
+    /* White text and elements */
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
 
     UTIL_LCD_SetFont(&Font24);
     UTIL_LCD_DisplayStringAt(0, 20, (uint8_t*)"FACE MANAGEMENT", CENTER_MODE);
@@ -160,17 +168,29 @@ static void DrawFaceTable(void)
     {
         uint16_t box_x = TABLE_MARGIN_X;
         uint16_t box_y = y + (ROW_HEIGHT - CHECKBOX_SIZE) / 2;
-        UTIL_LCD_DrawRect(box_x, box_y, CHECKBOX_SIZE, CHECKBOX_SIZE, UTIL_LCD_COLOR_BLACK);
 
+        /* Checkbox border white */
+        UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
+        UTIL_LCD_DrawRect(box_x, box_y, CHECKBOX_SIZE, CHECKBOX_SIZE, UTIL_LCD_COLOR_WHITE);
+
+        /* Fill if selected */
         if (g_selected[i])
         {
             UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_DARKGREEN);
-            UTIL_LCD_FillRect(box_x + 4, box_y + 4, CHECKBOX_SIZE - 8, CHECKBOX_SIZE - 8, UTIL_LCD_COLOR_DARKGREEN);
-            UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
+            UTIL_LCD_FillRect(box_x + 4, box_y + 4,
+                              CHECKBOX_SIZE - 8, CHECKBOX_SIZE - 8,
+                              UTIL_LCD_COLOR_DARKGREEN);
         }
 
-        UTIL_LCD_DisplayStringAt(box_x + CHECKBOX_SIZE + 20, y + 10, (uint8_t*)g_usernames[i], LEFT_MODE);
-        UTIL_LCD_DrawHLine(TABLE_MARGIN_X, y + ROW_HEIGHT, SCREEN_W - 2 * TABLE_MARGIN_X, UTIL_LCD_COLOR_GRAY);
+        /* Username text (white) */
+        UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
+        UTIL_LCD_DisplayStringAt(box_x + CHECKBOX_SIZE + 20, y + 10,
+                                 (uint8_t*)g_usernames[i], LEFT_MODE);
+
+        /* Horizontal divider line (white/grayish) */
+        UTIL_LCD_DrawHLine(TABLE_MARGIN_X, y + ROW_HEIGHT,
+                           SCREEN_W - 2 * TABLE_MARGIN_X, UTIL_LCD_COLOR_WHITE);
+
         y += ROW_HEIGHT + 2;
     }
 
@@ -180,14 +200,16 @@ static void DrawFaceTable(void)
     DrawButtons();
 }
 
+
 static void DrawButtons(void)
 {
     int x_delete = 120;
     int x_back   = x_delete + BUTTON_W + BUTTON_GAP;
 
-    DrawButtonRounded(x_delete, BUTTON_Y, BUTTON_W, BUTTON_H, UTIL_LCD_COLOR_LIGHTGRAY, "DELETE SELECTED");
-    DrawButtonRounded(x_back,   BUTTON_Y, BUTTON_W, BUTTON_H, UTIL_LCD_COLOR_LIGHTGRAY, "BACK");
+    DrawButtonRounded(x_delete, BUTTON_Y, BUTTON_W, BUTTON_H, UTIL_LCD_COLOR_BLACK, "DELETE SELECTED");
+    DrawButtonRounded(x_back,   BUTTON_Y, BUTTON_W, BUTTON_H, UTIL_LCD_COLOR_BLACK, "BACK");
 }
+
 
 /* ===== Touch logic ===== */
 static void ToggleSelection(uint16_t x, uint16_t y)
