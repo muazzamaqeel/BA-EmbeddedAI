@@ -21,22 +21,19 @@
 #include "app_sleepmode.h"
 
 /* --- Keypad layout --- */
-#define FR_KEY_W   90
+#define FR_KEY_W   100     // slightly smaller
 #define FR_KEY_H   65
-#define FR_KEY_SP  20
+#define FR_KEY_SP  22
 
 #define FR_KEYPAD_ORIGIN_X  ((800/2 - (3*FR_KEY_W + 2*FR_KEY_SP)/2))
-#define FR_KEYPAD_ORIGIN_Y  140
-
-/* Expected PIN */
-//#define FR_EXPECTED_PIN  "1234"
+#define FR_KEYPAD_ORIGIN_Y  145
 
 /* Buffer */
 static char fr_pin_buffer[8];
 static int  fr_pin_len = 0;
 
 /* Colors */
-#define FR_PIN_BG_COLOR  UTIL_LCD_COLOR_LIGHTGRAY
+#define FR_PIN_BG_COLOR  UTIL_LCD_COLOR_DARKGRAY
 
 /* ===== Internal helpers ===== */
 static void FR_UI_DrawBackground(void)
@@ -44,7 +41,7 @@ static void FR_UI_DrawBackground(void)
     UTIL_LCD_SetBackColor(FR_PIN_BG_COLOR);
     UTIL_LCD_SetTextColor(FR_PIN_BG_COLOR);
     UTIL_LCD_FillRect(0, 0, 800, 480, FR_PIN_BG_COLOR);
-    printf("[UI-FR] PIN background drawn (grey)\r\n");
+    printf("[UI-FR] PIN background drawn (dark gray)\r\n");
 }
 
 static void FR_UI_DrawKey(int row, int col, const char *label,
@@ -56,13 +53,14 @@ static void FR_UI_DrawKey(int row, int col, const char *label,
     UTIL_LCD_SetTextColor(fillColor);
     UTIL_LCD_FillRect(x, y, FR_KEY_W, FR_KEY_H, fillColor);
 
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_DrawRect(x, y, FR_KEY_W, FR_KEY_H, UTIL_LCD_COLOR_BLACK);
+    // Border (white for contrast)
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_DrawRect(x, y, FR_KEY_W, FR_KEY_H, UTIL_LCD_COLOR_WHITE);
 
     UTIL_LCD_SetBackColor(fillColor);
     UTIL_LCD_SetTextColor(textColor);
-    UTIL_LCD_SetFont(&Font20);
-    UTIL_LCD_DisplayStringAt(x + FR_KEY_W/2 - 10, y + FR_KEY_H/2 - 10,
+    UTIL_LCD_SetFont(&Font20);   // slightly smaller font
+    UTIL_LCD_DisplayStringAt(x + FR_KEY_W/2 - 8, y + FR_KEY_H/2 - 10,
                              (uint8_t*)label, LEFT_MODE);
 
     printf("[UI-FR] Key drawn '%s' @ (%d,%d)\r\n", label, x, y);
@@ -80,8 +78,8 @@ static void FR_UI_DrawKeypad(void)
     for (int r=0; r<4; r++) {
         for (int c=0; c<3; c++) {
             const char *label = keys[r][c];
-            uint32_t fill = UTIL_LCD_COLOR_WHITE;
-            uint32_t text = UTIL_LCD_COLOR_BLACK;
+            uint32_t fill = UTIL_LCD_COLOR_BLACK;     // numeric buttons: black
+            uint32_t text = UTIL_LCD_COLOR_WHITE;     // white text
 
             if (strcmp(label,"CLR")==0) {
                 fill = UTIL_LCD_COLOR_RED;
@@ -102,21 +100,22 @@ static void FR_UI_DrawPinBuffer(void)
     memset(disp, '*', fr_pin_len);
     disp[fr_pin_len] = '\0';
 
-    // Clear area
+    // Clear previous area
     UTIL_LCD_SetBackColor(FR_PIN_BG_COLOR);
     UTIL_LCD_SetTextColor(FR_PIN_BG_COLOR);
-    UTIL_LCD_FillRect(200, 60, 400, 50, FR_PIN_BG_COLOR);
+    UTIL_LCD_FillRect(200, 60, 400, 60, FR_PIN_BG_COLOR);
 
-    // White box
+    // White box for PIN entry
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(200, 60, 400, 50, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(200, 60, 400, 60, UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_DrawRect(200, 60, 400, 50, UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_DrawRect(200, 60, 400, 60, UTIL_LCD_COLOR_BLACK);
 
-    // Masked PIN
+    // Masked PIN (centered)
     UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_SetFont(&Font20);
-    UTIL_LCD_DisplayStringAt(220, 75, (uint8_t*)disp, LEFT_MODE);
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_SetFont(&Font24);
+    UTIL_LCD_DisplayStringAt(0, 75, (uint8_t*)disp, CENTER_MODE);
 
     printf("[UI-FR] PIN buffer updated: '%s'\r\n", disp);
 }
@@ -179,7 +178,7 @@ void UI_FR_PinScreen_WaitForOK(void)
                                 printf("[UI-FR] Wrong PIN!\r\n");
                                 UTIL_LCD_SetBackColor(FR_PIN_BG_COLOR);
                                 UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_RED);
-                                UTIL_LCD_DisplayStringAt(220, 120,
+                                UTIL_LCD_DisplayStringAt(220, 130,
                                     (uint8_t*)"Wrong PIN", LEFT_MODE);
 
                                 fr_pin_len = 0;
