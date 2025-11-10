@@ -178,9 +178,12 @@ static void exit_sleep(void)
     CMW_CAMERA_Resume(DCMIPP_PIPE1);
     CMW_CAMERA_Resume(DCMIPP_PIPE2);
 
-    // --- NEW: allow sensor and ISP to re-stabilize ---
-    HAL_Delay(600);   // 0.6 s is typically enough for IMX335 AE/AWB to settle
+    HAL_Delay(600); // allow ISP settle
 
+    /* --- NEW: Re-mount SD card after waking --- */
+    extern bool USB_SD_Mount(void);
+    USB_SD_Mount();
+    printf("[SLEEP] SD card re-mounted after wake\r\n");
     // --- NEW: clear any stale face detection buffers ---
     //extern void Pipeline_ResetDetection(void);
     //Pipeline_ResetDetection();
