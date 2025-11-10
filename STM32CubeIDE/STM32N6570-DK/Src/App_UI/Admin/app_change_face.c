@@ -144,8 +144,12 @@ static void DrawButtonRounded(int x, int y, int w, int h, uint32_t color, const 
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_SetFont(&Font20);
 
-    int text_y = y + (h / 2) - (Font20.Height / 2);
-    UTIL_LCD_DisplayStringAt(x, text_y, (uint8_t*)label, CENTER_MODE);
+    /* Compute exact center coordinates for text */
+    int16_t text_width  = strlen(label) * Font20.Width;
+    int16_t text_x = x + (w - text_width) / 2;
+    int16_t text_y = y + (h - Font20.Height) / 2;
+
+    UTIL_LCD_DisplayStringAt(text_x, text_y, (uint8_t*)label, LEFT_MODE);
 }
 
 

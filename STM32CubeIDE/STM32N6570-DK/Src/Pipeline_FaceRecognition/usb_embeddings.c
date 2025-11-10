@@ -5,13 +5,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
-
+#include "usb_embeddings.h"  // ✅ brings extern FATFS fs
+FATFS fs;                      // ✅ global SD card filesystem
+static bool sd_mounted = false; // ✅ add this line back
 /* =============================== */
 /* SD Card low-level helpers       */
 /* =============================== */
-static FATFS fs;
-static bool sd_mounted = false;
 
+#include "fatfs.h"
+extern FATFS fs;
 bool USB_SD_IsDetected(void)
 {
     return (BSP_SD_IsDetected(0) == SD_PRESENT);

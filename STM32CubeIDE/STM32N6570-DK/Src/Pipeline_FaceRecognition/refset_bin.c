@@ -9,6 +9,8 @@
 #include <math.h>
 #include <ctype.h>
 #include "app_change_pin.h"
+#include "fatfs.h"
+#include "usb_embeddings.h"
 
 extern void FR_DecryptAllRefsetOnce(void);
 
@@ -151,13 +153,18 @@ void FR_Refset_FreeAll(void)
 
 bool FR_LoadAndDecryptPinForName(const char *base_dir, const char *name)
 {
+
+	if (f_getfree("0:", NULL, NULL) != FR_OK) {
+	    printf("[PIN] Re-mounting SD card...\r\n");
+	    f_mount(&fs, "0:", 1);
+	}
     char lname[64];
     strncpy(lname, name, sizeof(lname)-1);
     lname[sizeof(lname)-1] = '\0';
     for (char *p = lname; *p; ++p) *p = tolower(*p);
 
     char path[128];
-    snprintf(path, sizeof(path), "%s/%s_pin.bin", base_dir, lname);
+    snprintf(path, sizeof(path), "0:/pin/%s_pin.bin", lname);
 
     FIL f;
     FRESULT r = f_open(&f, path, FA_READ);

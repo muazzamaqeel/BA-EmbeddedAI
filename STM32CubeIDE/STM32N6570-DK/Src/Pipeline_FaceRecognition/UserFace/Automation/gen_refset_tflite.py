@@ -67,7 +67,7 @@ def center_square_resize_to_minus1_1(path, size=(160, 160)):
     x0, y0 = (w - side) // 2, (h - side) // 2
     im = im.crop((x0, y0, x0 + side, y0 + side)).resize(size, Image.BILINEAR)
     arr = np.asarray(im, dtype=np.float32)
-    arr = arr * (1.0 / 127.5) - 1.0
+    arr = (arr - 127.0) / 128.0
     print(f"[IMG] Shape after resize: {arr.shape}, range=({arr.min():.2f},{arr.max():.2f})")
     return arr
 
