@@ -20,7 +20,7 @@ try {
     $Loader = $config.LoaderPath
 }
 catch {
-    throw "Failed to parse config.json — check syntax or file path."
+    throw "Failed to parse config.json, check syntax or file path."
 }
 
 if (-not (Test-Path $Loader)) {
