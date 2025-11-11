@@ -15,9 +15,11 @@
 #include <stdbool.h>
 #include "app_change_pin.h"
 #include "app_sleepmode.h"
+#include "admin_pin.h"
 
 /* Shared current PIN (default "1234") */
 char g_current_pin[8] = "1234";
+char g_admin_pin[8] = "1234";
 
 /* --- Keypad layout (same as app_ui_pin.c) --- */
 #define CP_KEY_W   90
@@ -105,7 +107,7 @@ CP_Result UI_ChangePinScreen_Show(void)
                                 cp_pin_buffer[cp_pin_len] = '\0';
 
                                 if (cp_state == CP_STEP_VERIFY_OLD) {
-                                    if (strcmp(cp_pin_buffer, g_current_pin) == 0) {
+                                	if (strcmp(cp_pin_buffer, g_admin_pin) == 0){
                                         cp_state = CP_STEP_ENTER_NEW;
                                         printf("[UI-CP] Old PIN verified, enter new PIN\r\n");
                                     } else {
@@ -119,8 +121,8 @@ CP_Result UI_ChangePinScreen_Show(void)
                                 }
                                 else if (cp_state == CP_STEP_CONFIRM_NEW) {
                                     if (strcmp(cp_pin_buffer, new_pin) == 0) {
-                                        strcpy(g_current_pin, new_pin);
-                                        printf("[UI-CP] PIN successfully changed to: %s\r\n", g_current_pin);
+                                    	strcpy(g_admin_pin, new_pin);
+                                        printf("[UI-CP] PIN successfully changed to: %s\r\n", g_admin_pin);
                                         HAL_Delay(1000);
                                         APP_SleepMode_Enable();
                                         return CP_RESULT_BACK_TO_START;  // ✅ go back to Start screen

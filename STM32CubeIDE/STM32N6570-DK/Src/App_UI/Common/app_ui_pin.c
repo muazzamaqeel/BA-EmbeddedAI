@@ -4,7 +4,7 @@
  * @brief   PIN entry / Auth screen with hidden keypad & no error text
  ******************************************************************************
  */
-
+#include "admin_pin.h"
 #include "stm32_lcd.h"
 #include "stm32_lcd_ex.h"
 #include "stm32n6570_discovery.h"
@@ -25,7 +25,7 @@
 #define KEYPAD_ORIGIN_Y  100
 
 /* Expected PIN */
-#define EXPECTED_PIN  "1234"
+#define EXPECTED_PIN  g_admin_pin
 
 /* Buffer */
 static char pin_buffer[8];
@@ -111,7 +111,7 @@ void UI_PinScreen_WaitForOK(void)
                             }
                             else if (strcmp(label,"OK")==0) {
                                 pin_buffer[pin_len] = '\0';
-                                if (strcmp(pin_buffer, EXPECTED_PIN)==0) {
+                                if (strcmp(pin_buffer, g_admin_pin)==0) {
                                     printf("[UI] Correct PIN entered!\r\n");
                                     APP_SleepMode_Enable();
                                     return;

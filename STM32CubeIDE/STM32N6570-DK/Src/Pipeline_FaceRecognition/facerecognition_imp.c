@@ -946,7 +946,7 @@ void pp_thread_fct(void *arg)
           if (!FR_LoadAndDecryptPinForName("0:pin", final_name)) {
               printf("[UI][ERR] No PIN file for %s, skipping PIN screen.\r\n", final_name);
           } else {
-              printf("[UI] Loaded decrypted PIN for %s → %s\r\n", final_name, g_current_pin);
+              printf("[UI] Loaded decrypted PIN for %s → %s\r\n", final_name);
               UI_FR_PinScreen_Show();
               UI_FR_PinScreen_WaitForOK();
           }
