@@ -538,7 +538,8 @@ void pp_thread_fct(void *arg)
 
 
   /* ---- Load encrypted reference set ---- */
-  FR_LoadRefsetFromSD_Bin("0:faces");
+  /* ---- Load encrypted reference set ---- */
+  FR_LoadRefsetFromSD_Bin(FR_SD_BASE_DIR);
   printf("[FR] Encrypted reference sets found: %d\r\n", g_ref_set_count);
 
   /* Wait for AES clocks to settle (or cmox init) */
@@ -971,9 +972,9 @@ void pp_thread_fct(void *arg)
 
           printf("[UI] Launching PIN screen for %s...\r\n", final_name);
 
-          if (!FR_LoadAndDecryptPinForName("1:pin", final_name)) {
+          if (!FR_LoadAndDecryptPinForName(FR_SD_BASE_DIR, final_name)) {
               printf("[UI][ERR] No PIN file for %s, skipping PIN screen.\r\n", final_name);
-          } else {
+          }else {
         	  printf("[UI] Loaded decrypted PIN for %s → %s\r\n", final_name, g_decrypted_pin);
               UI_FR_PinScreen_Show();
               UI_FR_PinScreen_WaitForOK();

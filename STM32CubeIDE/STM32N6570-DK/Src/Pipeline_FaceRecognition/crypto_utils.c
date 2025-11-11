@@ -108,7 +108,8 @@ int FR_DecryptEmbedding_ToFloat(const uint8_t *cipher, size_t len_bytes,
 
 /* --------------------------------------------------------------------------
  * Bulk decrypt + normalize all reference embeddings
- * -------------------------------------------------------------------------- */
+
+/*
 void FR_DecryptAllRefsetOnce(void)
 {
     printf("[DEC] Starting software AES-CBC decryption for %d embeddings...\r\n",
@@ -119,7 +120,6 @@ void FR_DecryptAllRefsetOnce(void)
         return;
     }
 
-    /* Allocate ref set container */
     g_ref_set = malloc(sizeof(EmbRec) * g_enc.n);
     g_ref_set_count = g_enc.n;
 
@@ -145,7 +145,6 @@ void FR_DecryptAllRefsetOnce(void)
         float *vec = (float*)temp;
         size_t n = len / sizeof(float);
 
-        /* Normalize to unit length */
         float norm = 0.0f;
         for (size_t j = 0; j < n; ++j)
             norm += vec[j] * vec[j];
@@ -165,3 +164,6 @@ void FR_DecryptAllRefsetOnce(void)
 
     printf("[DEC] All embeddings decrypted + normalized (TinyAES backend)\r\n");
 }
+
+
+*/

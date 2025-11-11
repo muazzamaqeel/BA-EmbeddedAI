@@ -17,18 +17,26 @@ AES_IV  = bytes.fromhex("000102030405060708090A0B0C0D0E0F")   # 16-byte IV
 # AES encryption helper
 # ==============================
 def encrypt_bytes(data: bytes) -> bytes:
-    """Encrypt raw bytes using AES-CBC (PKCS7 only if not 16B aligned)."""
+    """
+    Encrypt raw bytes using AES-CBC with PKCS#7 padding ALWAYS applied.
+    (STM32 decryptor expects padded blocks even if already aligned)
+    """
     print(f"[AES] Raw length: {len(data)} bytes")
+
+    # Create AES cipher context
     cipher = AES.new(AES_KEY, AES.MODE_CBC, AES_IV)
-    if len(data) % 16 == 0:
-        print("[AES] Length is block-aligned, skipping padding")
-        enc = cipher.encrypt(data)
-    else:
-        print("[AES] Length not aligned, padding applied")
-        enc = cipher.encrypt(pad(data, 16))
+
+    # Always pad, even for block-aligned data
+    padded = pad(data, 16)
+    print(f"[AES] Padded length: {len(padded)} bytes (added {len(padded) - len(data)} bytes padding)")
+
+    # Encrypt
+    enc = cipher.encrypt(padded)
+
     print(f"[AES] Encrypted length: {len(enc)} bytes")
     print(f"[AES] First 16 bytes ciphertext: {enc[:16].hex().upper()}")
     return enc
+
 
 
 # ==============================

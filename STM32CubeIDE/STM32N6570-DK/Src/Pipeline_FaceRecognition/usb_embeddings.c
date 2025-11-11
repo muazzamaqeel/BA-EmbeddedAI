@@ -1,19 +1,16 @@
 #include "usb_embeddings.h"
-#include "stm32n6xx_hal.h"
 #include "stm32n6570_discovery_sd.h"
-#include "fatfs.h"
 #include <stdio.h>
 #include <string.h>
-#include <stdbool.h>
-#include "usb_embeddings.h"  // ✅ brings extern FATFS fs
-FATFS fs;                      // ✅ global SD card filesystem
-static bool sd_mounted = false; // ✅ add this line back
+
+/* Single global FS instance (others use extern in headers) */
+FATFS fs;
+static bool sd_mounted = false;
+
 /* =============================== */
 /* SD Card low-level helpers       */
 /* =============================== */
 
-#include "fatfs.h"
-extern FATFS fs;
 bool USB_SD_IsDetected(void)
 {
     return (BSP_SD_IsDetected(0) == SD_PRESENT);
@@ -38,9 +35,22 @@ bool USB_SD_Mount(void)
     }
     else
     {
+        sd_mounted = false;
         printf("[SD] Mount failed (%d)\r\n", res);
         return false;
     }
+}
+
+bool USB_SD_EnsureMounted(void)
+{
+    if (!USB_SD_IsDetected())
+    {
+        printf("[SD] No card detected ❌\r\n");
+        return false;
+    }
+    if (sd_mounted)
+        return true;
+    return USB_SD_Mount();
 }
 
 void USB_SD_ListDir(const char *path)
@@ -75,7 +85,7 @@ void USB_SD_Test(void)
         if (USB_SD_Mount())
         {
             USB_SD_ListDir("0:");
-            USB_SD_ListDir("0:faces");
+            USB_SD_ListDir("0:/binaries");
         }
     }
 }
