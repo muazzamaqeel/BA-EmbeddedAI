@@ -34,6 +34,16 @@
 #ifndef FR_ENROLL_SIM_MIN
 #define FR_ENROLL_SIM_MIN 0.65f /* drop noisy enroll sample if below this to mean */
 #endif
+/* ---------- Tuning (override via -D or app_config.h if you want) ---------- */
+#ifndef FR_THR_ON
+#define FR_THR_ON   0.77f
+#endif
+
+/* Global frame snapshot buffer (used by fr_get_frame_snapshot / fr_clear_frame_snapshot) */
+struct {
+    uint8_t *ptr;
+    uint32_t len;
+} g_frame_snapshot = { NULL, 0 };
 
 /* ---------- local DCACHE helpers (TU-private) ---------- */
 static inline void fr_dcache_align_range(void **addr, size_t *len)
@@ -116,6 +126,14 @@ static int   g_last_is_match = 0;
 /* Ping-pong buffers to avoid read-while-write races */
 static float g_det_frame_snap[2][NN_WIDTH * NN_HEIGHT * 3] ALIGN_32 IN_PSRAM;
 static volatile uint32_t g_snap_idx = 0;
+
+void fr_clear_frame_snapshot(void)
+{
+    printf("[FR][Snapshot] Cleared last frame snapshot.\r\n");
+    if (g_frame_snapshot.ptr) {
+        memset((void*)g_frame_snapshot.ptr, 0, g_frame_snapshot.len);
+    }
+}
 
 /* External caller (nn thread) pushes the *float* detector input here. */
 void fr_update_frame_snapshot(const float *src_nhwc, uint32_t bytes)

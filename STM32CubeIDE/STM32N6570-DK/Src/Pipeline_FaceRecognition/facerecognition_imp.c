@@ -191,7 +191,15 @@ void FaceRec_Run_NoLock(void);
 extern bqueue_t nn_output_queue;
 extern display_t disp;
 extern volatile char g_fr_overlay_label[32];
-
+/* Hysteresis lock for identity */
+typedef struct {
+  char  name[32];
+  float score;
+  int   bad_frames;
+  int   locked;
+} id_lock_t;
+static id_lock_t lock = {{0}, 0.0f, 0, 0};
+extern char g_decrypted_pin[8];   // from crypto_utils.c or app_change_pin.c
 
 /* ---- Reference set now handled dynamically via refset_bin.h ---- */
 // typedef struct { const char* name; const float* data; int dim; } EmbRec;
@@ -200,11 +208,75 @@ extern volatile char g_fr_overlay_label[32];
 // extern void    FR_BuildCombinedRefset(void);
 
 
+/* Simple stabilizer for a single primary box */
+typedef struct {
+  od_pp_outBuffer_t roi;
+  int   have;
+  int   visible_count;
+  int   missing_count;
+  uint32_t last_seen_ms;
+} primary_t;
+static primary_t primary = {0};
+
+/* selection/stabilization knobs (local consts for clarity) */
+const float     ACCEPT_CONF_MIN  = FR_ACCEPT_CONF_MIN;
+const float     ACCEPT_SIDE_MIN  = FR_ACCEPT_SIDE_MIN;
+const float     CENTER_TOL       = FR_CENTER_TOL;
+const float     SCORE_SIDE_REF   = FR_SCORE_SIDE_REF;
+const float     STABLE_IOU_MIN   = FR_STABLE_IOU_MIN;
+const int       HOLD_MISS_FRAMES = FR_HOLD_MISS_FRAMES;
+const float     EMA_ALPHA        = FR_EMA_ALPHA;
+
+/* FR throttling & thresholds */
+uint32_t last_fr_ms = 0;
+const uint32_t FR_PERIOD = FR_PERIOD_MS;
+const float    THR_ON    = FR_THR_ON;
+const float    THR_OFF   = FR_THR_OFF;
+
+/* Debug cadence */
+uint32_t last_dbg_ms = 0;
+
+/* Previous embedding for self-consistency */
+float prev_emb[FR_EMB_SIZE]; int have_prev = 0;
+
+/* Identity lock */
+
+/* ---- Anti-retrigger (PIN gating) ---- */
+static volatile bool g_pin_session_active = false;
+static uint32_t      g_last_unlock_ms     = 0;
+static int           g_stable_count       = 0;
+static char          last_name[32]        = {0};
 
 /* ---------------- helpers ---------------- */
 
 static inline int clampi(int v, int lo, int hi){ return (v<lo)?lo:((v>hi)?hi:v); }
 static inline float clampf(float v, float lo, float hi){ return (v<lo)?lo:((v>hi)?hi:v); }
+
+
+// ======================================================
+// Face Recognition state reset (called after PIN unlock)
+// ======================================================
+void FR_ResetRecognitionState(void)
+{
+    printf("[FR][RESET] Clearing recognition and tracking state...\r\n");
+
+    g_fr_overlay_label[0] = '\0';
+
+    memset((void*)&primary, 0, sizeof(primary));
+    memset((void*)&lock, 0, sizeof(lock));
+
+    have_prev = 0;
+    memset((void*)prev_emb, 0, sizeof(prev_emb));
+
+    memset((void*)last_name, 0, sizeof(last_name));
+    g_stable_count = 0;
+    g_pin_session_active = false;
+
+    printf("[FR][RESET] State cleared — ready for new face input.\r\n");
+}
+
+
+
 
 static float cosine_sim(const float *a, const float *b, int n)
 {
@@ -435,13 +507,7 @@ static float l2_norm(const float *x, int n)
   return (float)sqrt(s);
 }
 
-/* Hysteresis lock for identity */
-typedef struct {
-  char  name[32];
-  float score;
-  int   bad_frames;
-  int   locked;
-} id_lock_t;
+
 
 void pp_thread_fct(void *arg)
 {
@@ -560,44 +626,6 @@ void pp_thread_fct(void *arg)
   }
 #endif
 
-  /* Simple stabilizer for a single primary box */
-  typedef struct {
-    od_pp_outBuffer_t roi;
-    int   have;
-    int   visible_count;
-    int   missing_count;
-    uint32_t last_seen_ms;
-  } primary_t;
-  static primary_t primary = {0};
-
-  /* selection/stabilization knobs (local consts for clarity) */
-  const float     ACCEPT_CONF_MIN  = FR_ACCEPT_CONF_MIN;
-  const float     ACCEPT_SIDE_MIN  = FR_ACCEPT_SIDE_MIN;
-  const float     CENTER_TOL       = FR_CENTER_TOL;
-  const float     SCORE_SIDE_REF   = FR_SCORE_SIDE_REF;
-  const float     STABLE_IOU_MIN   = FR_STABLE_IOU_MIN;
-  const int       HOLD_MISS_FRAMES = FR_HOLD_MISS_FRAMES;
-  const float     EMA_ALPHA        = FR_EMA_ALPHA;
-
-  /* FR throttling & thresholds */
-  uint32_t last_fr_ms = 0;
-  const uint32_t FR_PERIOD = FR_PERIOD_MS;
-  const float    THR_ON    = FR_THR_ON;
-  const float    THR_OFF   = FR_THR_OFF;
-
-  /* Debug cadence */
-  uint32_t last_dbg_ms = 0;
-
-  /* Previous embedding for self-consistency */
-  float prev_emb[FR_EMB_SIZE]; int have_prev = 0;
-
-  /* Identity lock */
-  static id_lock_t lock = {{0}, 0.0f, 0, 0};
-  /* ---- Anti-retrigger (PIN gating) ---- */
-  static volatile bool g_pin_session_active = false;
-  static uint32_t      g_last_unlock_ms     = 0;
-  static int           g_stable_count       = 0;
-  static char          last_name[32]        = {0};
 
   while (1)
   {
@@ -943,10 +971,10 @@ void pp_thread_fct(void *arg)
 
           printf("[UI] Launching PIN screen for %s...\r\n", final_name);
 
-          if (!FR_LoadAndDecryptPinForName("0:pin", final_name)) {
+          if (!FR_LoadAndDecryptPinForName("1:pin", final_name)) {
               printf("[UI][ERR] No PIN file for %s, skipping PIN screen.\r\n", final_name);
           } else {
-              printf("[UI] Loaded decrypted PIN for %s → %s\r\n", final_name);
+        	  printf("[UI] Loaded decrypted PIN for %s → %s\r\n", final_name, g_decrypted_pin);
               UI_FR_PinScreen_Show();
               UI_FR_PinScreen_WaitForOK();
           }

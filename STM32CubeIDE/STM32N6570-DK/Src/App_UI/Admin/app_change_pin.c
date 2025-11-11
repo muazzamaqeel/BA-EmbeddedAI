@@ -20,6 +20,8 @@
 /* Shared current PIN (default "1234") */
 char g_current_pin[8] = "1234";
 char g_admin_pin[8] = "1234";
+/* Global decrypted PIN buffer shared across modules */
+char g_decrypted_pin[8] = {0};
 
 /* --- Keypad layout (same as app_ui_pin.c) --- */
 #define CP_KEY_W   90

@@ -33,6 +33,7 @@ void  fr_prepare_input_for_det(const od_pp_outBuffer_t *d,
                                int det_idx);
 
 void  fr_after_inference_and_decide(const float *emb_in, int emb_len, int det_idx);
+void fr_clear_frame_snapshot(void);
 
 int   fr_is_enrolled(void);
 int   fr_get_last_match(float *sim_out);

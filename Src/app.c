@@ -1390,7 +1390,7 @@ void APP_FaceDetection_Reset(void)
 {
     printf("[APP] Face Detection reset requested (after PIN unlock)\r\n");
 
-    // Clear overlay label + LCD
+    // Clear overlay + LCD
     g_fr_overlay_label[0] = '\0';
     UTIL_LCD_SetLayer(SCRL_LAYER_1);
     UTIL_LCD_Clear(UTIL_LCD_COLOR_TRANSPARENT);
@@ -1399,7 +1399,13 @@ void APP_FaceDetection_Reset(void)
     TRK_Init();   // optional: clear tracker state
 #endif
 
-    // Re-enable pipeline without restarting camera
+    // ✅ NEW: Reset FaceRec internal state
+    FR_ResetRecognitionState();
+
+    // ✅ Optional: also clear frame snapshot buffer
+    fr_clear_frame_snapshot();
+
+    // Resume detection pipeline
     APP_SleepMode_Disable();
 
     // Wake up NN and display threads (they auto-continue next frame)
@@ -1407,4 +1413,5 @@ void APP_FaceDetection_Reset(void)
 
     printf("[APP] Detection pipeline resumed without camera restart.\r\n");
 }
+
 
