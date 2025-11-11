@@ -30,6 +30,14 @@ char g_decrypted_pin[8] = {0};
 #define CP_KEYPAD_ORIGIN_X  ((800/2 - (3*CP_KEY_W + 2*CP_KEY_SP)/2))
 #define CP_KEYPAD_ORIGIN_Y  100
 
+/* --- PIN display box (white background above keypad) --- */
+#define PIN_BOX_X   180   // move a bit more to the left (align with keypad)
+#define PIN_BOX_Y    20   // raise higher above keypad
+#define PIN_BOX_W   440   // make wider (matches keypad width visually)
+#define PIN_BOX_H    50   // slightly taller for clearer visibility
+
+
+
 /* Buffers */
 static char cp_pin_buffer[8];
 static int  cp_pin_len = 0;
@@ -38,21 +46,48 @@ static char new_pin[8];
 /* Current FSM state */
 static CP_State cp_state;
 
-/* ===== Helpers ===== */
 static void CP_UI_DrawBackground(void)
 {
     /* Just draw background image, no text */
     UTIL_LCD_DrawBitmap(0, 0, (uint8_t*)0x77AE0000);
+
+    /* Draw PIN input box */
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(PIN_BOX_X, PIN_BOX_Y, PIN_BOX_W, PIN_BOX_H, UTIL_LCD_COLOR_WHITE);
+
+    /* Outline for clarity */
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_DrawRect(PIN_BOX_X, PIN_BOX_Y, PIN_BOX_W, PIN_BOX_H, UTIL_LCD_COLOR_BLACK);
+
     printf("[UI-CP] Change PIN screen background drawn\r\n");
 }
+
 
 static void CP_UI_LogPinBuffer(void)
 {
     char disp[16];
     memset(disp, '*', cp_pin_len);
     disp[cp_pin_len] = '\0';
+
+    /* Clear old content area */
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(PIN_BOX_X + 2, PIN_BOX_Y + 2, PIN_BOX_W - 4, PIN_BOX_H - 4, UTIL_LCD_COLOR_WHITE);
+
+    /* Draw centered stars */
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_SetFont(&Font24);  // Bigger, visible font
+
+    int textWidth  = strlen(disp) * 14;  // Approx width per char
+    int textHeight = 24;                 // Font24 height
+    int textX = PIN_BOX_X + (PIN_BOX_W - textWidth) / 2;
+    int textY = PIN_BOX_Y + (PIN_BOX_H - textHeight) / 2;
+
+    UTIL_LCD_DisplayStringAt(textX, textY, (uint8_t*)disp, LEFT_MODE);
+
     printf("[UI-CP] PIN buffer updated: '%s'\r\n", disp);
 }
+
 
 /* ===== Public API ===== */
 CP_Result UI_ChangePinScreen_Show(void)
