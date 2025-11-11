@@ -34,20 +34,32 @@ static void UI_DrawBackground(void)
 static void UI_DrawButton(int x, int y, int w, int h,
                           uint32_t fill, const char *label)
 {
-    /* Fill */
+    /* --- Fill --- */
     UTIL_LCD_SetTextColor(fill);
     UTIL_LCD_FillRect(x, y, w, h, fill);
 
-    /* Border */
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_DrawRect(x, y, w, h, UTIL_LCD_COLOR_BLACK);
+    /* --- Border --- */
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_DrawRect(x, y, w, h, UTIL_LCD_COLOR_WHITE);
 
-    /* Label */
+    /* --- Label --- */
     UTIL_LCD_SetBackColor(fill);
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_SetFont(&Font20);
-    UTIL_LCD_DisplayStringAt(x + 20, y + 20, (uint8_t*)label, LEFT_MODE);
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_SetFont(&Font24);   // readable, bold look
+
+    /* --- Compute text width manually --- */
+    uint32_t char_width  = UTIL_LCD_GetFont()->Width;
+    uint32_t text_width  = strlen(label) * char_width;
+    uint32_t text_height = UTIL_LCD_GetFont()->Height;
+
+    /* --- Center the text --- */
+    int text_x = x + (w - text_width) / 2;
+    int text_y = y + (h - text_height) / 2;
+
+    UTIL_LCD_DisplayStringAt(text_x, text_y, (uint8_t*)label, LEFT_MODE);
 }
+
+
 
 void UI_StartScreen_Show(void)
 {
@@ -61,9 +73,9 @@ void UI_StartScreen_Show(void)
     UTIL_LCD_Clear(UTIL_LCD_COLOR_TRANSPARENT);
     UI_DrawBackground();              // Background bitmap (still visible through transparency)
     UI_DrawButton(BTN_START_X, BTN_START_Y, BTN_START_W, BTN_START_H,
-                  UTIL_LCD_COLOR_WHITE, "Start");
+                  UTIL_LCD_COLOR_BLACK, "START");
     UI_DrawButton(BTN_ADMIN_X, BTN_ADMIN_Y, BTN_ADMIN_W, BTN_ADMIN_H,
-                  UTIL_LCD_COLOR_LIGHTGRAY, "Admin");
+                  UTIL_LCD_COLOR_BLACK, "ADMIN");
 }
 
 
