@@ -127,13 +127,13 @@ const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 #endif
 
 #ifndef FR_MATCH_THR
-#define FR_MATCH_THR    0.50f
+#define FR_MATCH_THR    0.65f
 #endif
 #ifndef FR_THR_ON
-#define FR_THR_ON       FR_MATCH_THR
+#define FR_THR_ON       0.65f
 #endif
 #ifndef FR_THR_OFF
-#define FR_THR_OFF      0.40f
+#define FR_THR_OFF      0.60f
 #endif
 #ifndef FR_LOCK_FORGET_FRAMES
 #define FR_LOCK_FORGET_FRAMES  15
