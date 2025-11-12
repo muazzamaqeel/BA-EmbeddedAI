@@ -1,12 +1,12 @@
 //app_ui_pin_face_rec.c
 /**
- ******************************************************************************
+ *******************************************************************************
  * @file    app_ui_pin_face_rec.c
  * @brief   PIN entry / Auth screen (FaceRec variant)
  *          - Visible keypad
  *          - Debounced touch
- *          - Shows "Wrong PIN" text
- ******************************************************************************
+ *          - Shows "Wrong PIN" or "Success" above PIN box
+ *******************************************************************************
  */
 
 #include "stm32_lcd.h"
@@ -21,7 +21,7 @@
 #include "app_sleepmode.h"
 
 /* --- Keypad layout --- */
-#define FR_KEY_W   100     // slightly smaller
+#define FR_KEY_W   100
 #define FR_KEY_H   65
 #define FR_KEY_SP  22
 
@@ -59,11 +59,9 @@ static void FR_UI_DrawKey(int row, int col, const char *label,
 
     UTIL_LCD_SetBackColor(fillColor);
     UTIL_LCD_SetTextColor(textColor);
-    UTIL_LCD_SetFont(&Font20);   // slightly smaller font
+    UTIL_LCD_SetFont(&Font20);
     UTIL_LCD_DisplayStringAt(x + FR_KEY_W/2 - 8, y + FR_KEY_H/2 - 10,
                              (uint8_t*)label, LEFT_MODE);
-
-    printf("[UI-FR] Key drawn '%s' @ (%d,%d)\r\n", label, x, y);
 }
 
 static void FR_UI_DrawKeypad(void)
@@ -78,15 +76,13 @@ static void FR_UI_DrawKeypad(void)
     for (int r=0; r<4; r++) {
         for (int c=0; c<3; c++) {
             const char *label = keys[r][c];
-            uint32_t fill = UTIL_LCD_COLOR_BLACK;     // numeric buttons: black
-            uint32_t text = UTIL_LCD_COLOR_WHITE;     // white text
+            uint32_t fill = UTIL_LCD_COLOR_BLACK;
+            uint32_t text = UTIL_LCD_COLOR_WHITE;
 
             if (strcmp(label,"CLR")==0) {
                 fill = UTIL_LCD_COLOR_RED;
-                text = UTIL_LCD_COLOR_WHITE;
             } else if (strcmp(label,"OK")==0) {
                 fill = UTIL_LCD_COLOR_GREEN;
-                text = UTIL_LCD_COLOR_WHITE;
             }
 
             FR_UI_DrawKey(r, c, label, fill, text);
@@ -94,6 +90,17 @@ static void FR_UI_DrawKeypad(void)
     }
 }
 
+/* --- Status text above PIN box --- */
+static void FR_UI_ShowStatus(const char *msg, uint32_t color)
+{
+    UTIL_LCD_SetBackColor(FR_PIN_BG_COLOR);
+    UTIL_LCD_FillRect(0, 25, 800, 30, FR_PIN_BG_COLOR); // clear previous text
+    UTIL_LCD_SetTextColor(color);
+    UTIL_LCD_SetFont(&Font24);
+    UTIL_LCD_DisplayStringAt(0, 25, (uint8_t*)msg, CENTER_MODE);
+}
+
+/* --- PIN stars --- */
 static void FR_UI_DrawPinBuffer(void)
 {
     char disp[16];
@@ -102,7 +109,6 @@ static void FR_UI_DrawPinBuffer(void)
 
     // Clear previous area
     UTIL_LCD_SetBackColor(FR_PIN_BG_COLOR);
-    UTIL_LCD_SetTextColor(FR_PIN_BG_COLOR);
     UTIL_LCD_FillRect(200, 60, 400, 60, FR_PIN_BG_COLOR);
 
     // White box for PIN entry
@@ -116,8 +122,6 @@ static void FR_UI_DrawPinBuffer(void)
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
     UTIL_LCD_SetFont(&Font24);
     UTIL_LCD_DisplayStringAt(0, 75, (uint8_t*)disp, CENTER_MODE);
-
-    printf("[UI-FR] PIN buffer updated: '%s'\r\n", disp);
 }
 
 /* ===== Public API (FaceRec variant) ===== */
@@ -130,6 +134,7 @@ void UI_FR_PinScreen_Show(void)
 
     FR_UI_DrawBackground();
     FR_UI_DrawKeypad();
+    FR_UI_ShowStatus("Enter PIN", UTIL_LCD_COLOR_WHITE);
     FR_UI_DrawPinBuffer();
 
     printf("[UI-FR] PIN screen shown (layer=1)\r\n");
@@ -160,27 +165,25 @@ void UI_FR_PinScreen_WaitForOK(void)
                             {"CLR","0","OK"}
                         };
                         const char *label = keys[r][c];
-                        printf("[TS-FR] Key pressed: %s\r\n", label);
 
                         if (strcmp(label,"CLR")==0) {
                             fr_pin_len = 0;
                             memset(fr_pin_buffer,0,sizeof(fr_pin_buffer));
+                            FR_UI_ShowStatus("Enter PIN", UTIL_LCD_COLOR_WHITE);
                             FR_UI_DrawPinBuffer();
                         }
                         else if (strcmp(label,"OK")==0) {
                             fr_pin_buffer[fr_pin_len] = '\0';
                             if (strcmp(fr_pin_buffer, g_current_pin) == 0) {
+                                FR_UI_ShowStatus("Success", UTIL_LCD_COLOR_GREEN);
                                 printf("[UI-FR] Correct PIN entered!\r\n");
+                                HAL_Delay(50);  // brief success flash
                                 APP_SleepMode_Enable();
                                 APP_FaceDetection_Reset();
                                 return;
                             } else {
+                                FR_UI_ShowStatus("Wrong PIN", UTIL_LCD_COLOR_RED);
                                 printf("[UI-FR] Wrong PIN!\r\n");
-                                UTIL_LCD_SetBackColor(FR_PIN_BG_COLOR);
-                                UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_RED);
-                                UTIL_LCD_DisplayStringAt(220, 130,
-                                    (uint8_t*)"Wrong PIN", LEFT_MODE);
-
                                 fr_pin_len = 0;
                                 memset(fr_pin_buffer,0,sizeof(fr_pin_buffer));
                                 FR_UI_DrawPinBuffer();
