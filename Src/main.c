@@ -151,7 +151,8 @@ if (XSPI_NOR_Map_Once() != 0) {
   MX_FATFS_Init();     // initialize FatFs stack
   USB_SD_Test();       // mount + read embeddings files
   printf("[MAIN] SD card check completed.\r\n\r\n");
-
+  printf("[MAIN] Starting Refset Loader Task...\r\n");
+  FR_StartRefsetLoader();   // <-- add this line
   /* ======================================================
    * MAIN UI via FSM (no extra task)
    * ====================================================== */

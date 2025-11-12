@@ -9,9 +9,20 @@
 #include <math.h>
 #include <ctype.h>
 #include "app_change_pin.h"
-#include "usb_embeddings.h"   // ✅ for USB_SD_EnsureMounted()
+#include "usb_embeddings.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
-/* ================= AES parameters ================= */
+/* Static FreeRTOS objects */
+static StaticTask_t g_refset_tcb;
+static StackType_t  g_refset_stack[512];
+static TaskHandle_t g_refset_task = NULL;
+
+/* Global ready flag */
+volatile bool g_refset_ready = false;
+
+/* --- Loader task body --- */
+/* AES key + IV (same as before) */
 static const uint8_t FR_AES_KEY_16[16] = {
     0x60,0x3D,0xEB,0x10,0x15,0xCA,0x71,0xBE,
     0x2B,0x73,0xAE,0xF0,0x85,0x7D,0x77,0x81
@@ -21,12 +32,12 @@ static const uint8_t FR_AES_IV_16[16]  = {
     0x08,0x09,0x0A,0x0B,0x0C,0x0D,0x0E,0x0F
 };
 
-/* ================= Global containers ================= */
-EncList g_enc = {0};        // encrypted embeddings
-EmbRec* g_ref_set = NULL;   // decrypted embeddings
+/* Globals */
+EncList g_enc = {0};
+EmbRec* g_ref_set = NULL;
 int g_ref_set_count = 0;
 
-/* ================= Helpers ================= */
+/* Helpers */
 static void* xmalloc(size_t n)
 {
     void* p = malloc(n);
@@ -34,7 +45,7 @@ static void* xmalloc(size_t n)
     return p;
 }
 
-/* --- AES CBC decrypt + PKCS7 remove --- */
+/* AES CBC decrypt with PKCS7 padding check */
 static int aes_cbc_pkcs7_decrypt_inplace(uint8_t* buf, size_t* len)
 {
     struct AES_ctx ctx;
@@ -44,38 +55,26 @@ static int aes_cbc_pkcs7_decrypt_inplace(uint8_t* buf, size_t* len)
     AES_CBC_decrypt_buffer(&ctx, buf, *len);
 
     uint8_t pad = buf[*len - 1];
-    if (pad > 0 && pad <= 16)
-    {
+    if (pad > 0 && pad <= 16 && pad <= *len)
         *len -= pad;
-    }
-    else
-    {
-        printf("[AES][WARN] No valid padding (last byte=%d)\r\n", pad);
+    else {
+        printf("[AES][WARN] Bad padding byte=%u (len=%lu)\r\n", pad, (unsigned long)*len);
     }
     return 0;
 }
 
-/* --- load single .bin (face embeddings) --- */
+/* Load single .bin (skip *_pin.bin) */
 static bool load_one_bin(const char* path)
 {
-    FIL f;
-    FRESULT r = f_open(&f, path, FA_READ);
-    if (r != FR_OK) {
-        printf("[BIN] open fail %s (err %d)\r\n", path, r);
-        return false;
-    }
+    FIL f; UINT br;
+    if (f_open(&f, path, FA_READ) != FR_OK) return false;
 
-    uint8_t hdr[12]; UINT br;
-    f_read(&f, hdr, sizeof(hdr), &br);
-    if (memcmp(hdr, "FREB", 4) != 0) {
-        printf("[BIN] Invalid header in %s\r\n", path);
-        f_close(&f);
-        return false;
-    }
+    uint8_t hdr[12]; f_read(&f, hdr, sizeof(hdr), &br);
+    if (memcmp(hdr, "FREB", 4) != 0) { f_close(&f); return false; }
 
-    uint16_t name_len = hdr[6] | (hdr[7] << 8);
-    uint16_t emb_dim  = hdr[8] | (hdr[9] << 8);
-    uint16_t n_emb    = hdr[10]| (hdr[11]<<8);
+    uint16_t name_len = hdr[6] | (hdr[7]<<8);
+    uint16_t emb_dim  = hdr[8] | (hdr[9]<<8);
+    uint16_t n_emb    = hdr[10]|(hdr[11]<<8);
 
     char* name = xmalloc(name_len+1);
     f_read(&f, name, name_len, &br);
@@ -96,7 +95,7 @@ static bool load_one_bin(const char* path)
     return true;
 }
 
-/* --- directory scanner for embeddings (skips *_pin.bin) --- */
+/* Directory scan */
 void FR_LoadRefsetFromSD_Bin(const char* dirpath)
 {
     if (!USB_SD_EnsureMounted()) return;
@@ -111,10 +110,7 @@ void FR_LoadRefsetFromSD_Bin(const char* dirpath)
         if (fi.fattrib & AM_DIR) continue;
         if (!strstr(fi.fname, ".bin")) continue;
 
-        // Skip PIN files
-        size_t len = strlen(fi.fname);
-        if (len > 8 && strcmp(fi.fname + (len - 8), "_pin.bin") == 0)
-            continue;
+        if (strstr(fi.fname, "_pin.bin")) continue;  // skip PIN files
 
         char path[128];
         snprintf(path, sizeof(path), "%s/%s", dirpath, fi.fname);
@@ -125,15 +121,12 @@ void FR_LoadRefsetFromSD_Bin(const char* dirpath)
     printf("[SD] total encrypted embeddings: %d\r\n", g_enc.n);
 }
 
-/* --- decrypt all embeddings --- */
+/* Decrypt embeddings safely */
 void FR_DecryptAllRefsetOnce(void)
 {
-    if (g_enc.n == 0) {
-        printf("[DEC][ERR] No embeddings loaded.\r\n");
-        return;
-    }
+    if (g_enc.n == 0) { printf("[DEC][ERR] No embeddings loaded.\r\n"); return; }
 
-    printf("[DEC] Starting software AES-CBC decryption for %d embeddings...\r\n", g_enc.n);
+    printf("[DEC] Starting AES-CBC decryption for %d embeddings...\r\n", g_enc.n);
 
     g_ref_set = xmalloc(sizeof(EmbRec) * g_enc.n);
     g_ref_set_count = g_enc.n;
@@ -141,115 +134,121 @@ void FR_DecryptAllRefsetOnce(void)
     for (int i=0; i<g_enc.n; ++i) {
         EncEntry *e = &g_enc.v[i];
         size_t dec_len = e->enc_len;
-
         uint8_t *dec_buf = xmalloc(dec_len);
         memcpy(dec_buf, e->enc, dec_len);
 
         aes_cbc_pkcs7_decrypt_inplace(dec_buf, &dec_len);
 
-        // validate expected embedding size (512 floats)
-        if (dec_len > sizeof(float) * e->emb_dim) {
-            printf("[DEC][WARN] %s padded to %d bytes → valid %d\r\n",
-                   e->name, e->enc_len, (int)dec_len);
-            dec_len = sizeof(float) * e->emb_dim;
-        }
+        if (dec_len > sizeof(float)*e->dim)
+            dec_len = sizeof(float)*e->dim;
 
-        float *fvec = (float *)dec_buf;
-        for (int j = 0; j < e->emb_dim; ++j) {
-            if (!isfinite(fvec[j])) fvec[j] = 0.0f;
+        float *fvec = (float*)dec_buf;
+        for (int j=0;j<e->dim;j++){
+            if (!isfinite(fvec[j]) || fabsf(fvec[j]) > 100.0f)
+                fvec[j] = 0.0f;   // sanitize corruption
         }
 
         g_ref_set[i].name = e->name;
-        g_ref_set[i].dim  = e->emb_dim;
+        g_ref_set[i].dim  = e->dim;
         g_ref_set[i].data = dec_buf;
     }
 
-    printf("[DEC] All embeddings decrypted + normalized (TinyAES backend)\r\n");
+    printf("[DEC] All embeddings decrypted (TinyAES backend)\r\n");
 }
 
-/* --- free memory --- */
+/* Free all */
 void FR_Refset_FreeAll(void)
 {
-    for (int i=0; i<g_ref_set_count; i++)
+    for (int i=0;i<g_ref_set_count;i++)
         free((void*)g_ref_set[i].data);
+    free(g_ref_set);
+    g_ref_set=NULL; g_ref_set_count=0;
 
-    free(g_ref_set); g_ref_set = NULL; g_ref_set_count = 0;
-
-    for (int i=0; i<g_enc.n; i++) {
-        free(g_enc.v[i].enc);
-        free(g_enc.v[i].name);
-    }
-
-    free(g_enc.v);
-    g_enc.v = NULL;
-    g_enc.n = 0;
+    for (int i=0;i<g_enc.n;i++){ free(g_enc.v[i].enc); free(g_enc.v[i].name); }
+    free(g_enc.v); g_enc.v=NULL; g_enc.n=0;
 }
 
-/* ============================================================
- *  PIN BIN loader and decryptor
- * ============================================================ */
+/* PIN loader */
 bool FR_LoadAndDecryptPinForName(const char *base_dir, const char *name)
 {
-    if (!base_dir || !name) {
-        printf("[PIN] Invalid args (base_dir or name is NULL)\r\n");
-        return false;
-    }
+    if (!USB_SD_EnsureMounted()) return false;
 
-    if (!USB_SD_EnsureMounted()) {
-        printf("[PIN] SD not mounted\r\n");
-        return false;
-    }
-
-    char lname[64];
-    strncpy(lname, name, sizeof(lname)-1);
-    lname[sizeof(lname)-1] = '\0';
-    for (char *p = lname; *p; ++p) *p = (char)tolower((unsigned char)*p);
+    char lname[64]; strncpy(lname, name, sizeof(lname)-1);
+    lname[sizeof(lname)-1]='\0';
+    for(char*p=lname;*p;p++) *p=tolower(*p);
 
     char path[128];
-    snprintf(path, sizeof(path), "%s/%s_pin.bin", base_dir, lname);
+    snprintf(path,sizeof(path),"%s/%s_pin.bin",base_dir,lname);
     printf("[PIN] Opening: %s\r\n", path);
 
-    FIL f;
-    FRESULT r = f_open(&f, path, FA_READ);
-    if (r != FR_OK) {
-        printf("[PIN] File not found or open fail (%d): %s\r\n", r, path);
-        return false;
-    }
+    FIL f; FRESULT r=f_open(&f,path,FA_READ);
+    if(r!=FR_OK){ printf("[PIN] File not found (%d)\r\n",r); return false; }
 
     uint8_t hdr[8]; UINT br;
-    f_read(&f, hdr, sizeof(hdr), &br);
-    if (memcmp(hdr, "FPIN", 4) != 0) {
-        printf("[PIN] Invalid header in %s\r\n", path);
-        f_close(&f);
-        return false;
-    }
+    f_read(&f,hdr,sizeof(hdr),&br);
+    if(memcmp(hdr,"FPIN",4)!=0){ printf("[PIN] Invalid header\r\n"); f_close(&f); return false; }
 
-    uint16_t ver      = hdr[4] | (hdr[5] << 8);
-    uint16_t name_len = hdr[6] | (hdr[7] << 8);
-    (void)ver;
+    uint16_t name_len=hdr[6]|(hdr[7]<<8);
+    char tmpname[64]={0}; f_read(&f,tmpname,name_len,&br);
 
-    char file_name[64] = {0};
-    f_read(&f, file_name, name_len, &br);
-    file_name[name_len] = '\0';
+    uint8_t len4[4]; f_read(&f,len4,4,&br);
+    uint32_t enc_len=len4[0]|(len4[1]<<8)|(len4[2]<<16)|(len4[3]<<24);
 
-    uint8_t len4[4];
-    f_read(&f, len4, 4, &br);
-    uint32_t enc_len = len4[0] | (len4[1]<<8) | (len4[2]<<16) | (len4[3]<<24);
-
-    uint8_t *enc_buf = xmalloc(enc_len + 1);
-    f_read(&f, enc_buf, enc_len, &br);
+    uint8_t *enc=xmalloc(enc_len+1);
+    f_read(&f,enc,enc_len,&br);
     f_close(&f);
 
-    printf("[PIN] Loaded %s (enc_len=%lu)\r\n", path, (unsigned long)enc_len);
+    aes_cbc_pkcs7_decrypt_inplace(enc,(size_t*)&enc_len);
+    enc[enc_len]='\0';
 
-    aes_cbc_pkcs7_decrypt_inplace(enc_buf, (size_t *)&enc_len);
-    enc_buf[enc_len] = '\0';
+    printf("[PIN] Decrypted PIN for %s: '%s'\r\n", name, (char*)enc);
 
-    printf("[PIN] Decrypted PIN for %s: '%s'\r\n", name, (char*)enc_buf);
-
-    memset(g_current_pin, 0, sizeof(g_current_pin));
-    strncpy(g_current_pin, (char*)enc_buf, sizeof(g_current_pin)-1);
-
-    free(enc_buf);
+    memset(g_current_pin,0,sizeof(g_current_pin));
+    strncpy(g_current_pin,(char*)enc,sizeof(g_current_pin)-1);
+    free(enc);
     return true;
+}
+
+static void RefsetLoader_Task(void *arg)
+{
+    (void)arg;
+    printf("[REFSET] Task start: mount + load + decrypt...\r\n");
+
+    if (!USB_SD_EnsureMounted()) {
+        printf("[REFSET][ERR] SD not mounted, aborting load.\r\n");
+        vTaskDelete(NULL);
+    }
+
+    FR_LoadRefsetFromSD_Bin("0:/binaries");
+    FR_DecryptAllRefsetOnce();
+
+    printf("[REFSET] Ready: %d embeddings in RAM\r\n", g_ref_set_count);
+    g_refset_ready = true;
+
+    vTaskDelete(NULL);
+}
+
+/* --- Blocking wait helper for FR init --- */
+void FR_WaitRefsetReady(void)
+{
+    while (!g_refset_ready) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+/* --- Launch once at startup (called from main_thread_fct) --- */
+void FR_StartRefsetLoader(void)
+{
+    if (g_refset_task == NULL) {
+        g_refset_task = xTaskCreateStatic(
+            RefsetLoader_Task,
+            "refset",
+            sizeof(g_refset_stack) / sizeof(StackType_t),
+            NULL,
+            tskIDLE_PRIORITY + 2,
+            g_refset_stack,
+            &g_refset_tcb
+        );
+        configASSERT(g_refset_task != NULL);
+    }
 }
