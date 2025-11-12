@@ -16,30 +16,21 @@
 #include <stdbool.h>
 #include "app_cam.h"
 #include "stm32n6570_discovery_lcd.h"
-#include "stm32n6570_discovery.h"   // for HAL and GPIO macros
+#include "stm32n6570_discovery.h"
 
 static volatile bool g_sleep_active = false;
 static uint32_t g_last_face_time = 0;
-static uint32_t g_wake_time = 0;  // Time when the system last woke up from sleep
+static uint32_t g_wake_time = 0;
 static bool touch_detected_since_last_sleep = false;
-
-/* --- Override flag: when true, sleep is disabled manually --- */
 static volatile bool g_sleep_disabled_override = false;
-
-/* --- Counter enable flag: active only after Start button pressed --- */
 static volatile bool g_sleep_counter_enabled = false;
-
 static void SleepMode_Task(void *arg);
 static void enter_sleep(void);
 static void exit_sleep(void);
-
 static StaticTask_t sleep_task_tcb;
 static StackType_t  sleep_task_stack[configMINIMAL_STACK_SIZE];
 static TaskHandle_t hSleepTask = NULL;
 
-/* ================================================================
- * LCD backlight control helpers
- * ================================================================ */
 static void LCD_Backlight_On(void)
 {
     LCD_DISP_BL_GPIO_CLK_ENABLE();
@@ -52,9 +43,6 @@ static void LCD_Backlight_Off(void)
     HAL_GPIO_WritePin(LCD_DISP_BL_GPIO_PORT, LCD_DISP_BL_PIN, GPIO_PIN_RESET);
 }
 
-/* ================================================================
- * Initialization
- * ================================================================ */
 void APP_SleepMode_Init(void)
 {
     if (hSleepTask == NULL) {
@@ -71,9 +59,6 @@ void APP_SleepMode_Init(void)
     }
 }
 
-/* ================================================================
- * Public API
- * ================================================================ */
 bool APP_SleepMode_IsActive(void)
 {
     return g_sleep_active;
@@ -97,65 +82,46 @@ void APP_SleepMode_EnableCounter(bool enable)
     printf("[SLEEP] Counter %s\r\n", enable ? "ENABLED" : "DISABLED");
 }
 
-/* Called from detector display/update code */
 void APP_SleepMode_UpdateFaceActivity(bool face_detected)
 {
-    /* Skip updates if counter is not active yet */
     if (!g_sleep_counter_enabled)
         return;
 
     if (face_detected) {
         g_last_face_time = HAL_GetTick();
-        touch_detected_since_last_sleep = false;  // reset touch flag
+        touch_detected_since_last_sleep = false;
     }
 }
 
-/* ================================================================
- * Task Implementation
- * ================================================================ */
-static const uint32_t WAKE_GRACE_MS = 1500;   // ignore sleep/touch after wake
-
+static const uint32_t WAKE_GRACE_MS = 1500;
 static void SleepMode_Task(void *arg)
 {
     (void)arg;
     TS_State_t ts;
     bool face_present_now = false;
-    static bool prev_touch = false;  // edge detect for touch
-
-    /* --- Link with pipeline / FR state --- */
-    extern bool g_pipeline_running;   // true when camera pipeline is active
-    extern bool g_fr_active;          // true during face recognition
+    static bool prev_touch = false;
+    extern bool g_pipeline_running;
+    extern bool g_fr_active;
 
     while (1)
     {
-        /* Sleep counter not yet started */
         if (!g_sleep_counter_enabled) {
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
-
-        /* Prevent sleep while FR or pipeline threads active */
         if (g_pipeline_running || g_fr_active) {
             vTaskDelay(pdMS_TO_TICKS(200));
             continue;
         }
-
-        /* Global override: disable sleep completely */
         if (g_sleep_disabled_override) {
             vTaskDelay(pdMS_TO_TICKS(200));
             continue;
         }
-
-        /* Grace window after wake-up */
         if (!g_sleep_active && (HAL_GetTick() - g_wake_time) < WAKE_GRACE_MS) {
             prev_touch = false;
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
-
-        /* ===================================================
-         * ACTIVE MODE (system awake)
-         * =================================================== */
         if (!g_sleep_active)
         {
             face_present_now = (HAL_GetTick() - g_last_face_time) < 500;
@@ -171,10 +137,6 @@ static void SleepMode_Task(void *arg)
                 }
             }
         }
-
-        /* ===================================================
-         * SLEEP MODE (screen off, wake on touch)
-         * =================================================== */
         else
         {
             if (BSP_TS_GetState(0, &ts) == BSP_ERROR_NONE)
@@ -200,18 +162,13 @@ static void enter_sleep(void)
 {
     if (g_sleep_active)
         return;
-
     g_sleep_active = true;
     printf("[SLEEP] Entering sleep mode...\r\n");
-
-    /* Suspend both camera pipelines */
     CMW_CAMERA_Suspend(DCMIPP_PIPE1);
     CMW_CAMERA_Suspend(DCMIPP_PIPE2);
-
     UTIL_LCD_Clear(UTIL_LCD_COLOR_BLACK);
-
-    BSP_LCD_DisplayOff(0);   // LTDC off
-    LCD_Backlight_Off();     // Backlight off
+    BSP_LCD_DisplayOff(0);
+    LCD_Backlight_Off();
 }
 
 static void exit_sleep(void)
@@ -222,17 +179,15 @@ static void exit_sleep(void)
     g_sleep_active = false;
     printf("[SLEEP] Exiting sleep mode...\r\n");
 
-    BSP_LCD_DisplayOn(0);    // LTDC on
-    LCD_Backlight_On();      // Backlight on
+    BSP_LCD_DisplayOn(0);
+    LCD_Backlight_On();
     UTIL_LCD_Clear(UTIL_LCD_COLOR_BLACK);
 
-    /* Resume camera pipelines */
     CMW_CAMERA_Resume(DCMIPP_PIPE1);
     CMW_CAMERA_Resume(DCMIPP_PIPE2);
 
-    HAL_Delay(600); // allow ISP to settle
+    HAL_Delay(600);
 
-    /* --- Re-mount SD card after wake --- */
     extern bool USB_SD_Mount(void);
     extern bool USB_SD_EnsureMounted(void);
 
@@ -242,15 +197,11 @@ static void exit_sleep(void)
     else
         printf("[SLEEP] SD card re-mounted successfully\r\n");
 
-    /* Update timers */
     g_last_face_time = HAL_GetTick();
     g_wake_time = g_last_face_time;
     touch_detected_since_last_sleep = false;
 }
 
-/* ================================================================
- * Optional delayed counter enable (used after Start pressed)
- * ================================================================ */
 void APP_SleepMode_EnableCounterDelayed(uint32_t delay_ms)
 {
     printf("[SLEEP] Counter will enable after %lu ms\r\n", delay_ms);

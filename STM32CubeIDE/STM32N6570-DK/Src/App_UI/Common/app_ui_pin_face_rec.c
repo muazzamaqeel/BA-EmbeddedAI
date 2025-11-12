@@ -20,22 +20,15 @@
 #include "app_change_pin.h"
 #include "app_sleepmode.h"
 
-/* --- Keypad layout --- */
 #define FR_KEY_W   100
 #define FR_KEY_H   65
 #define FR_KEY_SP  22
-
 #define FR_KEYPAD_ORIGIN_X  ((800/2 - (3*FR_KEY_W + 2*FR_KEY_SP)/2))
 #define FR_KEYPAD_ORIGIN_Y  145
-
-/* Buffer */
 static char fr_pin_buffer[8];
 static int  fr_pin_len = 0;
-
-/* Colors */
 #define FR_PIN_BG_COLOR  UTIL_LCD_COLOR_DARKGRAY
 
-/* ===== Internal helpers ===== */
 static void FR_UI_DrawBackground(void)
 {
     UTIL_LCD_SetBackColor(FR_PIN_BG_COLOR);
@@ -90,7 +83,6 @@ static void FR_UI_DrawKeypad(void)
     }
 }
 
-/* --- Status text above PIN box --- */
 static void FR_UI_ShowStatus(const char *msg, uint32_t color)
 {
     UTIL_LCD_SetBackColor(FR_PIN_BG_COLOR);
@@ -100,31 +92,23 @@ static void FR_UI_ShowStatus(const char *msg, uint32_t color)
     UTIL_LCD_DisplayStringAt(0, 25, (uint8_t*)msg, CENTER_MODE);
 }
 
-/* --- PIN stars --- */
 static void FR_UI_DrawPinBuffer(void)
 {
     char disp[16];
     memset(disp, '*', fr_pin_len);
     disp[fr_pin_len] = '\0';
-
-    // Clear previous area
     UTIL_LCD_SetBackColor(FR_PIN_BG_COLOR);
     UTIL_LCD_FillRect(200, 60, 400, 60, FR_PIN_BG_COLOR);
-
-    // White box for PIN entry
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_FillRect(200, 60, 400, 60, UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
     UTIL_LCD_DrawRect(200, 60, 400, 60, UTIL_LCD_COLOR_BLACK);
-
-    // Masked PIN (centered)
     UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
     UTIL_LCD_SetFont(&Font24);
     UTIL_LCD_DisplayStringAt(0, 75, (uint8_t*)disp, CENTER_MODE);
 }
 
-/* ===== Public API (FaceRec variant) ===== */
 void UI_FR_PinScreen_Show(void)
 {
     APP_SleepMode_Disable();
@@ -195,8 +179,6 @@ void UI_FR_PinScreen_WaitForOK(void)
                                 FR_UI_DrawPinBuffer();
                             }
                         }
-
-                        /* Debounce */
                         do {
                             BSP_TS_GetState(0, &ts_state);
                             HAL_Delay(30);

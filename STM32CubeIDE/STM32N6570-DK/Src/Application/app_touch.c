@@ -5,8 +5,8 @@
 #include <stdio.h>
 #include <assert.h>
 
-#define LCD_BG_WIDTH   800   // <-- use your actual value
-#define LCD_BG_HEIGHT  480   // <-- use your actual value
+#define LCD_BG_WIDTH   800
+#define LCD_BG_HEIGHT  480
 
 #define FREERTOS_PRIORITY(p) ((UBaseType_t)((int)tskIDLE_PRIORITY + configMAX_PRIORITIES/2 + (p)))
 

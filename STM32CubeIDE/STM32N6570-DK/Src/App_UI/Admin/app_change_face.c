@@ -17,17 +17,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
-
 #ifndef UTIL_LCD_COLOR_TRANSPARENT
 #define UTIL_LCD_COLOR_TRANSPARENT 0x0000u
 #endif
-
 #ifndef UTIL_LCD_COLOR_DARKGRAY
 #define UTIL_LCD_COLOR_DARKGRAY 0x7BEF
 #endif
 
-
-/* ===== Layout constants ===== */
 #define FACES_DIR_PATH      "0:binaries"
 #define MAX_USERS           16
 #define MAX_NAME_LEN        32
@@ -44,13 +40,10 @@
 #define BUTTON_GAP          100
 #define BUTTON_Y            (SCREEN_H - BUTTON_H - 25)
 
-/* ===== Globals ===== */
 static FATFS g_fs;
 static char g_usernames[MAX_USERS][MAX_NAME_LEN];
 static bool g_selected[MAX_USERS];
 static int  g_user_count = 0;
-
-/* ===== Forward declarations ===== */
 static bool EnsureSDPresent(void);
 static bool EnsureSDMounted(void);
 static void ReadUserListFromSD(void);
@@ -59,7 +52,6 @@ static void DrawButtons(void);
 static void ToggleSelection(uint16_t x, uint16_t y);
 static void DeleteSelectedUsers(void);
 
-/* ===== SD helpers ===== */
 static bool EnsureSDPresent(void)
 {
     if (BSP_SD_IsDetected(0) != SD_PRESENT)
@@ -89,7 +81,6 @@ static bool EnsureSDMounted(void)
     return false;
 }
 
-/* ===== Directory listing ===== */
 static void ReadUserListFromSD(void)
 {
     g_user_count = 0;
@@ -131,27 +122,18 @@ static void ReadUserListFromSD(void)
     f_closedir(&dir);
 }
 
-/* ===== Drawing ===== */
 static void DrawButtonRounded(int x, int y, int w, int h, uint32_t color, const char *label)
 {
-    /* Button background (black) */
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
     UTIL_LCD_FillRect(x, y, w, h, UTIL_LCD_COLOR_BLACK);
-
-    /* Border (white) */
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_DrawRect(x, y, w, h, UTIL_LCD_COLOR_WHITE);
-
-    /* Text (white on black) */
     UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_BLACK);
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_SetFont(&Font20);
-
-    /* Compute exact center coordinates for text */
     int16_t text_width  = strlen(label) * Font20.Width;
     int16_t text_x = x + (w - text_width) / 2;
     int16_t text_y = y + (h - Font20.Height) / 2;
-
     UTIL_LCD_DisplayStringAt(text_x, text_y, (uint8_t*)label, LEFT_MODE);
 }
 
@@ -162,10 +144,7 @@ static void DrawFaceTable(void)
     BSP_LCD_DisplayOn(0);
     UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_DARKGRAY);
     UTIL_LCD_Clear(UTIL_LCD_COLOR_DARKGRAY);
-
-    /* White text and elements */
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
-
     UTIL_LCD_SetFont(&Font24);
     UTIL_LCD_DisplayStringAt(0, 20, (uint8_t*)"FACE MANAGEMENT", CENTER_MODE);
     UTIL_LCD_SetFont(&Font20);
@@ -176,11 +155,9 @@ static void DrawFaceTable(void)
         uint16_t box_x = TABLE_MARGIN_X;
         uint16_t box_y = y + (ROW_HEIGHT - CHECKBOX_SIZE) / 2;
 
-        /* Checkbox border white */
         UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
         UTIL_LCD_DrawRect(box_x, box_y, CHECKBOX_SIZE, CHECKBOX_SIZE, UTIL_LCD_COLOR_WHITE);
 
-        /* Fill if selected */
         if (g_selected[i])
         {
             UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_DARKGREEN);
@@ -189,12 +166,10 @@ static void DrawFaceTable(void)
                               UTIL_LCD_COLOR_DARKGREEN);
         }
 
-        /* Username text (white) */
         UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
         UTIL_LCD_DisplayStringAt(box_x + CHECKBOX_SIZE + 20, y + 10,
                                  (uint8_t*)g_usernames[i], LEFT_MODE);
 
-        /* Horizontal divider line (white/grayish) */
         UTIL_LCD_DrawHLine(TABLE_MARGIN_X, y + ROW_HEIGHT,
                            SCREEN_W - 2 * TABLE_MARGIN_X, UTIL_LCD_COLOR_WHITE);
 
@@ -207,7 +182,6 @@ static void DrawFaceTable(void)
     DrawButtons();
 }
 
-
 static void DrawButtons(void)
 {
     int x_delete = 120;
@@ -217,8 +191,6 @@ static void DrawButtons(void)
     DrawButtonRounded(x_back,   BUTTON_Y, BUTTON_W, BUTTON_H, UTIL_LCD_COLOR_BLACK, "BACK");
 }
 
-
-/* ===== Touch logic ===== */
 static void ToggleSelection(uint16_t x, uint16_t y)
 {
     for (int i = 0; i < g_user_count; i++)
@@ -243,7 +215,6 @@ static void DeleteSelectedUsers(void)
     {
         if (g_selected[i])
         {
-            /* 1️⃣ Delete main .bin file */
             snprintf(path, sizeof(path), "%s/%s.bin", FACES_DIR_PATH, g_usernames[i]);
             FRESULT res = f_unlink(path);
             if (res == FR_OK)
@@ -255,8 +226,6 @@ static void DeleteSelectedUsers(void)
             {
                 printf("[UI] Failed to delete %s (err %d)\r\n", path, res);
             }
-
-            /* 2️⃣ Also delete matching _pin.bin (case-insensitive) */
             snprintf(path, sizeof(path), "%s/%s_pin.bin", FACES_DIR_PATH, g_usernames[i]);
             res = f_unlink(path);
             if (res == FR_OK)
@@ -270,20 +239,15 @@ static void DeleteSelectedUsers(void)
         }
     }
 
-    /* Refresh table after deletion */
     ReadUserListFromSD();
     DrawFaceTable();
 
-    /* Feedback on screen */
     char msg[64];
     snprintf(msg, sizeof(msg), "Deleted %d user(s)", deleted);
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_DARKGREEN);
     UTIL_LCD_DisplayStringAt(0, BUTTON_Y - 35, (uint8_t*)msg, CENTER_MODE);
 }
 
-
-/* ===== Main function ===== */
-/* ===== Main function ===== */
 void UI_TestPassed_Show(void)
 {
     APP_SleepMode_Disable();
@@ -308,10 +272,8 @@ void UI_TestPassed_Show(void)
                 uint16_t tx = ts.TouchX;
                 uint16_t ty = ts.TouchY;
 
-                /* Checkbox / row selection */
                 ToggleSelection(tx, ty);
 
-                /* Buttons */
                 if (ty >= BUTTON_Y && ty <= BUTTON_Y + BUTTON_H)
                 {
                     if (tx >= 120 && tx <= 120 + BUTTON_W)
@@ -324,17 +286,11 @@ void UI_TestPassed_Show(void)
                     {
                         printf("[UI] BACK pressed → returning to caller\r\n");
 
-                        /* --- Clean up overlay and ensure L1 is usable by caller --- */
                         UTIL_LCD_SetLayer(1);
                         UTIL_LCD_Clear(UTIL_LCD_COLOR_TRANSPARENT);
                         BSP_LCD_SetLayerVisible(0, 1, ENABLE);
                         BSP_LCD_Reload(0, BSP_LCD_RELOAD_IMMEDIATE);
 
-                        /* If you disabled sleep on entry, re-enable it now */
-                        // APP_SleepMode_Enable();  // <- use your real re-enable call if available
-
-                        /* IMPORTANT: Do NOT call UI_StartScreen_Show() or UI_WaitForButton() here.
-                           Just return and let the caller (Admin/FSM) decide. */
                         return;
                     }
 

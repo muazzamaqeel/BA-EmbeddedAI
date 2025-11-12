@@ -13,35 +13,24 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
-#include "app_sleepmode.h"   // for sleep override control
+#include "app_sleepmode.h"
 
-/* --- Keypad layout (invisible, touch only) --- */
 #define KEY_W   90
 #define KEY_H   65
 #define KEY_SP  20
 #define KEYPAD_ORIGIN_X  ((800/2 - (3*KEY_W + 2*KEY_SP)/2))
 #define KEYPAD_ORIGIN_Y  100
-
-/* --- PIN display box (white rectangle above keypad) --- */
 #define PIN_BOX_W   440
 #define PIN_BOX_H    50
 #define PIN_BOX_X   ((800 - PIN_BOX_W) / 2)
 #define PIN_BOX_Y    20
-
-/* Expected PIN */
 #define EXPECTED_PIN  g_admin_pin
-
-/* Buffer */
 static char pin_buffer[8];
 static int  pin_len = 0;
 
-/* ===== Internal helpers ===== */
 static void UI_DrawBackground(void)
 {
-    /* Background image */
     UTIL_LCD_DrawBitmap(0, 0, (uint8_t*)0x77AE0000);
-
-    /* Draw PIN input box */
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_FillRect(PIN_BOX_X, PIN_BOX_Y, PIN_BOX_W, PIN_BOX_H, UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
@@ -55,12 +44,8 @@ static void UI_DrawPinBuffer(void)
     char disp[16];
     memset(disp, '*', pin_len);
     disp[pin_len] = '\0';
-
-    /* Clear inside box */
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_FillRect(PIN_BOX_X + 2, PIN_BOX_Y + 2, PIN_BOX_W - 4, PIN_BOX_H - 4, UTIL_LCD_COLOR_WHITE);
-
-    /* Draw stars centered in box */
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
     UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_SetFont(&Font24);
@@ -73,7 +58,6 @@ static void UI_DrawPinBuffer(void)
     printf("[UI] PIN buffer updated: '%s'\r\n", disp);
 }
 
-/* ===== Public API ===== */
 void UI_PinScreen_Show(void)
 {
     APP_SleepMode_Disable();

@@ -7,12 +7,10 @@
 #include <stdbool.h>
 #include "app_ui_admin.h"
 #include "app_change_pin.h"
-#include "app_change_face.h"   // ✅ include face-change UI
+#include "app_change_face.h"
 
-/* --- Address of Admin background image in NOR Flash --- */
 #define ADMIN_BG_ADDR   ((uint32_t)0x778A0000)
 
-/* --- Button geometry --- */
 #define BTN1_X   200
 #define BTN1_Y   300
 #define BTN1_W   150
@@ -45,10 +43,6 @@ AdminResult UI_AdminScreen_Show(void)
                 touch_active = true;
                 uint16_t tx = ts_state.TouchX;
                 uint16_t ty = ts_state.TouchY;
-
-                /* ==============================
-                 * Button 1 → Change PIN
-                 * ============================== */
                 if (tx >= BTN1_X && tx <= BTN1_X + BTN1_W &&
                     ty >= BTN1_Y && ty <= BTN1_Y + BTN1_H)
                 {
@@ -62,45 +56,23 @@ AdminResult UI_AdminScreen_Show(void)
                             if (!ts_state.TouchDetected) break;
                             HAL_Delay(50);
                         }
-                        return ADMIN_RESULT_BACK_TO_START;   // back to Start
+                        return ADMIN_RESULT_BACK_TO_START;
                     } else {
                         UI_Admin_DrawBackground();
                         return ADMIN_RESULT_STAY;
                     }
                 }
-
-                /* ==============================
-                 * Button 2 → Change Face
-                 * ============================== */
-                /* ==============================
-                 * Button 2 → Change Face
-                 * ============================== */
-                /* ==============================
-                 * Button 2 → Change Face
-                 * ============================== */
                 else if (tx >= BTN2_X && tx <= BTN2_X + BTN2_W &&
                          ty >= BTN2_Y && ty <= BTN2_Y + BTN2_H)
                 {
                     printf("[UI] Admin Button2 pressed (Change Face)\r\n");
-
-                    /* Show Change-Face window (leaf screen). It returns when user presses BACK. */
                     UI_TestPassed_Show();
-
-                    /* Debounce: drain any lingering touch */
                     for (int i = 0; i < 10; i++) {
                         BSP_TS_GetState(0, &ts_state);
                         if (!ts_state.TouchDetected) break;
                         HAL_Delay(50);
                     }
-
-                    /* Decide where to go next:
-                       - If you want to return to START: */
                     return ADMIN_RESULT_BACK_TO_START;
-
-                    /* Or, if you prefer to stay in Admin instead, uncomment this:
-                    UI_Admin_DrawBackground();
-                    return ADMIN_RESULT_STAY;
-                    */
                 }
 
 
