@@ -1,14 +1,3 @@
-/**
- * @file embeddings_extractor.c
- * @brief Boot-time embeddings from existing BMP files (auto-embedded).
- *
- * - Reads g_user_bmps[] (auto-generated from UserFace/*.bmp)
- * - Supports 24-bit uncompressed BMP (BI_RGB), top-down or bottom-up
- * - Center-square resamples → FaceRec input (FR_IN_W x FR_IN_H), u8 quantized
- * - Runs FaceRec once per image and prints:  <label>|<dim>|v0,...,vN-1  (floats after dequant)
- * - No live-frame logic, no camera, no detector usage
- */
-
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
@@ -18,43 +7,37 @@
 
 #include "stm32n6xx_hal.h"
 
-#include "emb_assets.h"              /* g_user_bmps[], g_user_bmps_count */
-#include "face_recognition.h"        /* fr_init(), fr_set_subject(), FR_IN_W/H */
-#include "ll_aton_runtime.h"         /* LL_Buffer_InfoTypeDef, LL_Buffer_* */
-#include "cache_utils.h"             /* DCACHE_Clean/Invalidate, dcache_align_range */
-#include "npu_guard.h"               /* NPU_Lock/Unlock, TAG_FR */
+#include "emb_assets.h"
+#include "face_recognition.h"
+#include "ll_aton_runtime.h"
+#include "cache_utils.h"
+#include "npu_guard.h"
 
-/* ----------- Defaults if not provided ----------- */
 #ifndef FR_IN_W
-#define FR_IN_W    160   /* INT8 FaceRec input width */
+#define FR_IN_W    160
 #endif
 #ifndef FR_IN_H
-#define FR_IN_H    160   /* INT8 FaceRec input height */
+#define FR_IN_H    160
 #endif
 #ifndef FR_EMB_SIZE
-#define FR_EMB_SIZE 512  /* INT8 FaceRec embedding dimension */
+#define FR_EMB_SIZE 512
 #endif
 #ifndef FR_SUBJECT_NAME
 #define FR_SUBJECT_NAME "ME"
 #endif
 
-/* FaceRec runtime entry points for your FR instance (provided by your app) */
 extern void FaceRec_Run_NoLock(void);
 extern const LL_Buffer_InfoTypeDef *LL_ATON_Input_Buffers_Info_face_recognition(void);
 extern const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 
-/* ============================== */
-/*     Minimal BMP 24-bit I/O     */
-/* ============================== */
-
 typedef struct {
-  const uint8_t *pixels;   /* pointer to start of pixel array                */
-  int width;               /* image width                                    */
-  int height_abs;          /* absolute height                                */
-  int row_stride;          /* bytes per row incl. 4B padding                 */
-  int bpp;                 /* bits per pixel (expect 24)                     */
-  int compression;         /* expect 0 (BI_RGB)                              */
-  bool top_down;           /* true if height < 0 (origin at top-left)        */
+  const uint8_t *pixels;
+  int width;
+  int height_abs;
+  int row_stride;
+  int bpp;
+  int compression;
+  bool top_down;
 } Bmp24View;
 
 static uint32_t rd_le32(const uint8_t *p){ return (uint32_t)p[0] | ((uint32_t)p[1]<<8) | ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24); }
@@ -67,9 +50,8 @@ static int bmp24_open(const uint8_t *buf, uint32_t len, Bmp24View *out)
 
   uint32_t pixel_off = rd_le32(buf + 10);
   const uint8_t *dib = buf + 14;
-  if (len < 14 + 40) return -3;            /* need BITMAPINFOHEADER (40 bytes) */
+  if (len < 14 + 40) return -3;
 
-  /* Parse BITMAPINFOHEADER (common path) */
   uint32_t dib_size  = rd_le32(dib + 0);   (void)dib_size;
   int32_t  w         = (int32_t) rd_le32(dib + 4);
   int32_t  h_signed  = (int32_t) rd_le32(dib + 8);
@@ -78,8 +60,8 @@ static int bmp24_open(const uint8_t *buf, uint32_t len, Bmp24View *out)
   uint32_t comp      = rd_le32(dib + 16);
 
   if (planes != 1)           return -4;
-  if (bpp != 24)             return -5;    /* only 24-bit supported */
-  if (comp != 0 /*BI_RGB*/)  return -6;    /* only uncompressed     */
+  if (bpp != 24)             return -5;
+  if (comp != 0 /*BI_RGB*/)  return -6;
   if (w <= 0 || h_signed == 0) return -7;
 
   bool top_down   = (h_signed < 0);
@@ -98,8 +80,6 @@ static int bmp24_open(const uint8_t *buf, uint32_t len, Bmp24View *out)
   return 0;
 }
 
-
-/* Fetch B,G,R from integer pixel coords (clamped) → return RGB floats [0..255] */
 static inline void bmp24_get_bgr(const Bmp24View *v, int x, int y, float *r, float *g, float *b)
 {
   if (x < 0) x = 0; if (x >= v->width) x = v->width - 1;
@@ -108,13 +88,11 @@ static inline void bmp24_get_bgr(const Bmp24View *v, int x, int y, float *r, flo
   int row = v->top_down ? y : (v->height_abs - 1 - y);
   const uint8_t *p = v->pixels + row * v->row_stride + x * 3;
   float B = (float)p[0], G = (float)p[1], R = (float)p[2];
-  *r = R; *g = G; *b = B;   /* convert to RGB order */
+  *r = R; *g = G; *b = B;
 }
 
-/* Center-square bilinear resample BMP24 → FR input NHWC uint8 (quantized [-1..1] → u8) */
 static void bmp24_center_square_to_fr_input_u8q(const Bmp24View *v, uint8_t *dst, int dw, int dh)
 {
-  /* centered square crop */
   int side = (v->width < v->height_abs) ? v->width : v->height_abs;
   int x0i = (v->width  - side) / 2;
   int y0i = (v->height_abs - side) / 2;
@@ -176,10 +154,6 @@ static void bmp24_center_square_to_fr_input_u8q(const Bmp24View *v, uint8_t *dst
   }
 }
 
-/* ============================== */
-/*       FR init helper           */
-/* ============================== */
-
 static void fr_init_once(void)
 {
   static int inited = 0;
@@ -191,25 +165,18 @@ static void fr_init_once(void)
   }
 }
 
-/* ============================== */
-/*      Public entry point        */
-/* ============================== */
-/* Call this early at boot to dump embeddings from embedded BMP assets. */
 int FR_ExtractEmbeddings_FromAssets(void)
 {
   fr_init_once();
 
-  /* Early out if no assets (still print an empty header for parsers) */
   if (g_user_bmps_count <= 0) {
     printf("# data_embeddings (assets)\r\n# count=0\r\n");
     return 0;
   }
 
-  /* Get FaceRec IO buffers */
   const LL_Buffer_InfoTypeDef *fr_in_info  = LL_ATON_Input_Buffers_Info_face_recognition();
   const LL_Buffer_InfoTypeDef *fr_out_info = LL_ATON_Output_Buffers_Info_face_recognition();
 
-  /* INT8 pipeline: input=uint8, output=int8 */
   uint8_t *fr_in      = (uint8_t*)LL_Buffer_addr_start(&fr_in_info[0]);
   int8_t  *fr_out     = (int8_t *)LL_Buffer_addr_start(&fr_out_info[0]);
   uint32_t fr_in_len  = LL_Buffer_len(&fr_in_info[0]);
@@ -239,7 +206,6 @@ int FR_ExtractEmbeddings_FromAssets(void)
   for (int i=0; i<g_user_bmps_count; ++i) {
     const EmbeddedBMP *E = &g_user_bmps[i];
 
-    /* Decode BMP header */
     Bmp24View v;
     int st = bmp24_open(E->data, E->size, &v);
     if (st != 0) {
@@ -248,34 +214,26 @@ int FR_ExtractEmbeddings_FromAssets(void)
       continue;
     }
 
-    /* Prepare FR input from BMP (center-square → 160x160, u8 quantized) */
     bmp24_center_square_to_fr_input_u8q(&v, fr_in, FR_IN_W, FR_IN_H);
-
-    /* CPU -> NPU */
     DCACHE_Clean(fr_in, need_in_bytes);
-
-    /* Run FaceRec once */
     NPU_Lock(TAG_FR);
     uint32_t t0 = HAL_GetTick();
     FaceRec_Run_NoLock();
     uint32_t dt = HAL_GetTick() - t0;
     NPU_Unlock(TAG_FR);
 
-    /* NPU -> CPU */
 #if defined(USE_DCACHE)
     { void *o=fr_out; size_t l=fr_out_len; dcache_align_range(&o,&l); SCB_InvalidateDCache_by_Addr(o,(int)l); }
 #else
     DCACHE_Invalidate(fr_out, fr_out_len);
 #endif
 
-    /* Output is INT8; dequantize with scale=1/128, zp=0 for printing */
     int emb_dim = (int)((fr_out_len < FR_EMB_SIZE) ? fr_out_len : FR_EMB_SIZE);
     float vec_f[FR_EMB_SIZE];
     for (int k=0; k<emb_dim; ++k) {
       vec_f[k] = (float)fr_out[k] * 0.0078125f;  /* 1/128 */
     }
 
-    /* Print one line per image:  <label>|<dim>|v0,...,vN-1 */
     const char *label = (E->name && E->name[0]) ? E->name : "img";
     printf("%s|%d|", label, emb_dim);
     for (int k=0; k<emb_dim; ++k) {

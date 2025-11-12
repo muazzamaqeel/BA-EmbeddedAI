@@ -8,15 +8,15 @@
 
 #include "crypto_utils.h"
 #include "aes.h"
-#include "refset_bin.h"     // ✅ shared structs: g_enc, g_ref_set, etc.
+#include "refset_bin.h"
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
 #include <stdbool.h>
-#include <stdlib.h>         // ✅ for malloc(), free()
+#include <stdlib.h>
 
 /* --------------------------------------------------------------------------
- * AES-128 CBC configuration — must match Python encryption script
+ * AES-128 CBC configuration — Mactching Python encryption script
  * -------------------------------------------------------------------------- */
 static const uint8_t FR_AES_KEY_16[16] = {
     0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
@@ -105,65 +105,3 @@ int FR_DecryptEmbedding_ToFloat(const uint8_t *cipher, size_t len_bytes,
     memcpy(out_f32, buf, n * sizeof(float));
     return (int)n;
 }
-
-/* --------------------------------------------------------------------------
- * Bulk decrypt + normalize all reference embeddings
-
-/*
-void FR_DecryptAllRefsetOnce(void)
-{
-    printf("[DEC] Starting software AES-CBC decryption for %d embeddings...\r\n",
-           g_enc.n);
-
-    if (g_enc.n <= 0) {
-        printf("[DEC][WARN] No encrypted embeddings found.\r\n");
-        return;
-    }
-
-    g_ref_set = malloc(sizeof(EmbRec) * g_enc.n);
-    g_ref_set_count = g_enc.n;
-
-    static uint8_t __attribute__((aligned(4))) temp[2048];
-
-    for (int i = 0; i < g_enc.n; ++i)
-    {
-        EncEntry *src = &g_enc.v[i];
-        size_t len = src->enc_len;
-
-        if (len > sizeof(temp)) {
-            printf("[DEC][ERR] %s too large (%u bytes)\r\n", src->name, (unsigned)len);
-            continue;
-        }
-
-        memcpy(temp, src->enc, len);
-        int ret = fr_aes_cbc_decrypt(temp, &len);
-        if (ret != 0) {
-            printf("[DEC][ERR] %s decrypt failed (%d)\r\n", src->name, ret);
-            continue;
-        }
-
-        float *vec = (float*)temp;
-        size_t n = len / sizeof(float);
-
-        float norm = 0.0f;
-        for (size_t j = 0; j < n; ++j)
-            norm += vec[j] * vec[j];
-        norm = sqrtf(norm) + 1e-9f;
-        for (size_t j = 0; j < n; ++j)
-            vec[j] /= norm;
-
-        float *stored = malloc(n * sizeof(float));
-        memcpy(stored, vec, n * sizeof(float));
-
-        g_ref_set[i].name = src->name;
-        g_ref_set[i].data = (const float*)stored;   // ✅ fixed const-cast
-        g_ref_set[i].dim  = (int)n;
-
-        printf("[DEC][%s] norm=%.6f\r\n", src->name, norm);
-    }
-
-    printf("[DEC] All embeddings decrypted + normalized (TinyAES backend)\r\n");
-}
-
-
-*/

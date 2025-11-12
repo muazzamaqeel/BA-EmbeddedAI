@@ -8,8 +8,7 @@
 #include <stdio.h>
 #include "stm32n6xx_hal.h"
 #include "FreeRTOS.h"
-#include "task.h"              // for vTaskDelay, pdMS_TO_TICKS
-//#include "usb_embeddings.h"
+#include "task.h"
 
 int FR_Rebuild_UserFace_Embeddings(void);
 

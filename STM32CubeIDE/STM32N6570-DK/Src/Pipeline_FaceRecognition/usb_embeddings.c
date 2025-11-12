@@ -3,13 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Single global FS instance (others use extern in headers) */
 FATFS fs;
 static bool sd_mounted = false;
-
-/* =============================== */
-/* SD Card low-level helpers       */
-/* =============================== */
 
 bool USB_SD_IsDetected(void)
 {
