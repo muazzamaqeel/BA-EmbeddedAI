@@ -5,8 +5,8 @@
  */
 
 #include "fr_helpers.h"
-#include "network.h"      /* for NN_WIDTH / NN_HEIGHT */
-#include "app_config.h"   /* FR_* macros, USE_DCACHE, etc. */
+#include "network.h"
+#include "app_config.h"
 
 #include <math.h>
 #include <string.h>
@@ -15,45 +15,41 @@
 #include <stddef.h>
 #include "stm32n6xx_hal.h"
 
-/* ---------- Tuning (override via -D or app_config.h if you want) ---------- */
 #ifndef FR_THR_ON
-#define FR_THR_ON   0.77f   /* enter-known threshold (cosine) */
+#define FR_THR_ON   0.77f
 #endif
 #ifndef FR_THR_OFF
-#define FR_THR_OFF  0.73f   /* exit-known threshold (must be < FR_THR_ON) */
+#define FR_THR_OFF  0.73f
 #endif
 #ifndef FR_EMA_A
-#define FR_EMA_A    0.25f   /* EMA smoothing factor [0..1], higher = snappier */
+#define FR_EMA_A    0.25f
 #endif
 #ifndef FR_KDROP
-#define FR_KDROP    3       /* consecutive frames below OFF to drop identity */
+#define FR_KDROP    3
 #endif
 #ifndef FR_CROP_MARGIN
-#define FR_CROP_MARGIN 1.10f /* square crop margin multiplier */
+#define FR_CROP_MARGIN 1.10f
 #endif
 #ifndef FR_ENROLL_SIM_MIN
-#define FR_ENROLL_SIM_MIN 0.65f /* drop noisy enroll sample if below this to mean */
+#define FR_ENROLL_SIM_MIN 0.65f
 #endif
-/* ---------- Tuning (override via -D or app_config.h if you want) ---------- */
 #ifndef FR_THR_ON
 #define FR_THR_ON   0.77f
 #endif
 
-/* Global frame snapshot buffer (used by fr_get_frame_snapshot / fr_clear_frame_snapshot) */
 struct {
     uint8_t *ptr;
     uint32_t len;
 } g_frame_snapshot = { NULL, 0 };
 
-/* ---------- local DCACHE helpers (TU-private) ---------- */
 static inline void fr_dcache_align_range(void **addr, size_t *len)
 {
 #if defined(USE_DCACHE)
   uintptr_t a = (uintptr_t)(*addr);
-  uintptr_t a0 = a & ~((uintptr_t)31);                 /* align down to 32B */
+  uintptr_t a0 = a & ~((uintptr_t)31);
   size_t extra = (size_t)(a - a0);
   size_t l0 = *len + extra;
-  l0 = (l0 + 31U) & ~31U;                              /* align up to 32B */
+  l0 = (l0 + 31U) & ~31U;
   *addr = (void *)a0;
   *len  = l0;
 #else
@@ -70,27 +66,23 @@ static inline void FR_DCACHE_Clean(void *addr, size_t len)
 #endif
 }
 
-/* ---------- small utilities ---------- */
 static inline int clampi(int v, int lo, int hi){ return (v<lo)?lo:((v>hi)?hi:v); }
 
-/* ---------- forward-static prototypes (avoid implicit decls) ---------- */
 static void  fr_l2_normalize(float *v, int n);
 static float cosine_similarity(const float *a, const float *b, int n);
 static void  fr_add_sample_normed_copy(const float *emb, int n);
 static void  fr_finalize_enrollment(int n);
 
-/* helpers requested */
 static void  fr_make_square_crop(int *x, int *y, int *w, int *h, int img_w, int img_h);
 void         fr_update_identity_state(float sim, int best_ref, int det_idx);
 static void  fr_average_refs(const void *set, int n, float *out); /* EmbRec-like */
 
-/* optional: INT8 -> float dequant path (for FR_OUT_IS_INT8) */
 #if FR_OUT_IS_INT8
 typedef struct {
-  float scale;   /* if you know the real scale, set it at runtime */
-  int   zp;      /* zero-point; FaceNet INT8 exports are usually symmetric (0) */
+  float scale;
+  int   zp;
 } fr_quant_t;
-static fr_quant_t g_out_q = { .scale = 1.0f, .zp = 0 }; /* set real values if available */
+static fr_quant_t g_out_q = { .scale = 1.0f, .zp = 0 };
 
 static void fr_from_int8_to_unit(const int8_t *src, float *dst, int n)
 {
@@ -99,7 +91,6 @@ static void fr_from_int8_to_unit(const int8_t *src, float *dst, int n)
 }
 #endif /* FR_OUT_IS_INT8 */
 
-/* ---------- runtime subject label ---------- */
 static char g_fr_subject[32] = "ME";
 void fr_set_subject(const char *name) {
   if (name && *name) {
@@ -108,22 +99,14 @@ void fr_set_subject(const char *name) {
   }
 }
 const char* fr_get_subject(void) { return g_fr_subject; }
-
-/* ---------- result latch (exposed via fr_get_last_match) ---------- */
 static float g_last_sim      = -1.f;
 static int   g_last_is_match = 0;
-
-/* ===== snapshot of detector input (NHWC FP32 [0..1]) =====
- * NOTE: keep this in PSRAM (if available) and 32B aligned.
- */
 #ifndef ALIGN_32
 #define ALIGN_32 __attribute__((aligned(32)))
 #endif
 #ifndef IN_PSRAM
 #define IN_PSRAM
 #endif
-
-/* Ping-pong buffers to avoid read-while-write races */
 static float g_det_frame_snap[2][NN_WIDTH * NN_HEIGHT * 3] ALIGN_32 IN_PSRAM;
 static volatile uint32_t g_snap_idx = 0;
 
@@ -135,53 +118,41 @@ void fr_clear_frame_snapshot(void)
     }
 }
 
-/* External caller (nn thread) pushes the *float* detector input here. */
 void fr_update_frame_snapshot(const float *src_nhwc, uint32_t bytes)
 {
-  uint32_t write_idx = 1u - g_snap_idx;               /* write into the non-active bank */
+  uint32_t write_idx = 1u - g_snap_idx;
   memcpy(g_det_frame_snap[write_idx], src_nhwc, (size_t)bytes);
-  FR_DCACHE_Clean(g_det_frame_snap[write_idx], (size_t)bytes);  /* CPU write visibility */
-  __DMB();                                            /* ensure data visible before publishing index */
-  g_snap_idx = write_idx;                             /* publish */
+  FR_DCACHE_Clean(g_det_frame_snap[write_idx], (size_t)bytes);
+  __DMB();
+  g_snap_idx = write_idx;
   __DMB();
 }
 
-/* Reader API used by pp_thread_fct() to consume a stable snapshot */
 void fr_get_frame_snapshot(const void **ptr, uint32_t *len)
 {
   if (ptr) *ptr = NULL;
   if (len) *len = 0;
 
   __DMB();
-  uint32_t read_idx = g_snap_idx;                     /* single atomic read */
+  uint32_t read_idx = g_snap_idx;
   __DMB();
 
   if (ptr) *ptr = (const void *)g_det_frame_snap[read_idx];
   if (len) *len = (uint32_t)(NN_WIDTH * NN_HEIGHT * 3 * sizeof(float));
 }
 
-/* ===== enrollment (centroid in RAM) ===== */
-#define FR_SAMPLES_TARGET 10  /* number of samples to build the centroid */
+#define FR_SAMPLES_TARGET 10
 
 static float g_me_samples[FR_SAMPLES_TARGET][FR_EMB_SIZE];
 static float g_me_centroid[FR_EMB_SIZE];
 static int   g_me_count    = 0;
 static int   g_enroll_done = 0;
-
-/* runtime-configurable match threshold & per-detection enroll gate */
 static float g_match_thr   = FR_DEFAULT_MATCH_THR;
-static int   g_enroll_gate = 1;  /* set per detection by fr_set_enroll_gate() */
+static int   g_enroll_gate = 1;
+static float g_personal_thr = 0.0f;
 
-/* Personal, data-driven threshold computed after enrollment (mu-1.5*sigma), capped later */
-static float g_personal_thr = 0.0f;  /* 0 means “not computed yet” */
-
-/* (optional) small gallery for 1:N — keep empty unless you paste refs
- * If you link embeddings_table.c, you can extern the set there when needed. */
 typedef struct { const char* name; const float* data; int dim; } EmbRec;
-/* extern const EmbRec g_ref_set[]; */
-/* extern const int g_ref_set_count; */
 
-/* ---------- EMA + Hysteresis state (per det_idx) ---------- */
 typedef struct {
   float ema_sim;
   int   is_known;
@@ -192,7 +163,6 @@ typedef struct {
 #define FR_TRACK_MAX 8
 static fr_track_t g_track[FR_TRACK_MAX];
 
-/* ---------- API ---------- */
 void fr_init(void)
 {
   memset(g_det_frame_snap, 0, sizeof(g_det_frame_snap));
@@ -205,7 +175,6 @@ void fr_init(void)
   g_enroll_gate  = 1;
   g_personal_thr = 0.0f;
 
-  /* Use compile-time label if provided, else runtime subject string */
 #ifdef FR_SUBJECT_NAME
   const char *subj = FR_SUBJECT_NAME;
 #else
@@ -216,13 +185,12 @@ void fr_init(void)
          subj, g_match_thr, FR_ENROLL_CONF_MIN, FR_ENROLL_MIN_SIDE, FR_ENROLL_CENTER_TOL);
 }
 
-/* Public gate setters/getters */
 int  fr_is_enrolled(void)               { return g_enroll_done; }
 
 int fr_get_last_match(float *sim_out)
 {
   if (sim_out) *sim_out = g_last_sim;
-  return g_last_is_match; /* NOTE: this reflects the *stable* hysteresis decision */
+  return g_last_is_match;
 }
 
 void fr_set_match_threshold(float thr)  { g_match_thr = thr; }
@@ -238,7 +206,6 @@ void fr_reset_enrollment(void)
   printf("[ENROLL] reset. Need %d fresh samples.\r\n", FR_SAMPLES_TARGET);
 }
 
-/* Safety: warn once if FR input & output alias the same address */
 void fr_check_alias(const void *in_ptr, const void *out_ptr)
 {
   static int warned = 0;
@@ -248,7 +215,6 @@ void fr_check_alias(const void *in_ptr, const void *out_ptr)
   }
 }
 
-/* Expose progress */
 int fr_get_enroll_progress(int *count_out, int *target_out)
 {
   if (count_out)  *count_out  = g_me_count;
@@ -256,12 +222,10 @@ int fr_get_enroll_progress(int *count_out, int *target_out)
   return g_enroll_done;
 }
 
-/* Effective threshold (global + capped personal) */
 float fr_get_effective_threshold(void)
 {
-  float base = g_match_thr;                         /* global knob (e.g., 0.80f) */
+  float base = g_match_thr;
   float pers = (g_personal_thr > 0.f) ? g_personal_thr : base;
-  /* Soft cap: personal thr cannot exceed base + 0.03; and never below base */
   float capped = fminf(pers, base + 0.03f);
   if (capped < base) capped = base;
   return capped;
@@ -276,12 +240,12 @@ static int fr_embedding_stats_and_check(const float *v, int n,
 
   for (int i=0;i<n;i++) {
     float x = v[i];
-    if (!(x == x)) { nan_cnt++; continue; }          /* NaN */
+    if (!(x == x)) { nan_cnt++; continue; }
     if (x < _mn) _mn = x;
     if (x > _mx) _mx = x;
     sum += x;
     s2  += x*x;
-    if (fabsf(x) > 16.f) big_cnt++;                  /* absurd for FR embeddings */
+    if (fabsf(x) > 16.f) big_cnt++;
   }
 
   if (mn)   *mn   = (nan_cnt==n) ? 0.f : _mn;
@@ -289,7 +253,6 @@ static int fr_embedding_stats_and_check(const float *v, int n,
   if (mean) *mean = (nan_cnt==n) ? 0.f : sum / (float)(n - nan_cnt);
   if (l2)   *l2   = s2;
 
-  /* corrupt if any NaN, or many absurdly big values, or min/max super huge */
   if (nan_cnt > 0) return 0;
   if (big_cnt > 0) return 0;
   if (fabsf(_mn) > 1e4f || fabsf(_mx) > 1e4f) return 0;
@@ -300,7 +263,6 @@ static int fr_embedding_stats_and_check(const float *v, int n,
 
 static void fr_make_square_crop(int *x, int *y, int *w, int *h, int img_w, int img_h)
 {
-  /* Expand to square with margin, clamp to image bounds */
   int side = (*w > *h) ? *w : *h;
   side = (int)(side * FR_CROP_MARGIN);
   int cx = *x + *w/2;
@@ -321,7 +283,7 @@ void fr_prepare_input_for_det(const od_pp_outBuffer_t *d,
                               int det_in_w, int det_in_h,
                               int det_idx)
 {
-  /* Convert normalized BlazeFace box to pixels */
+
   float fx0 = (d->x_center - d->width * 0.5f) * det_in_w;
   float fy0 = (d->y_center - d->height* 0.5f) * det_in_h;
   float fww = d->width  * det_in_w;
@@ -336,7 +298,6 @@ void fr_prepare_input_for_det(const od_pp_outBuffer_t *d,
   const float sx_scale = (float)w / (float)fr_w;
   const float sy_scale = (float)h / (float)fr_h;
 
-  /* Throttled ROI trace */
   {
     static uint32_t last_roi_log = 0;
     uint32_t now = HAL_GetTick();
@@ -352,13 +313,11 @@ void fr_prepare_input_for_det(const od_pp_outBuffer_t *d,
 
   uint32_t t0 = HAL_GetTick();
 
-  /* Lock-in which snapshot we use for this whole crop */
   __DMB();
-  uint32_t snap_idx = g_snap_idx;      /* single atomic read is enough */
+  uint32_t snap_idx = g_snap_idx;
   __DMB();
   const float *snap = g_det_frame_snap[snap_idx];
 
-  /* Bilinear sample from the *snapshot* buffer (NHWC FP32 in [0..1]) */
   for (int yy=0; yy<fr_h; ++yy) {
     float sy = (float)y + (yy + 0.5f) * sy_scale;
     int sy0 = (int)floorf(sy);
@@ -393,7 +352,7 @@ void fr_prepare_input_for_det(const od_pp_outBuffer_t *d,
                   snap[idx01+c]*w01 +
                   snap[idx10+c]*w10 +
                   snap[idx11+c]*w11;
-        /* Convert [0..1] -> [-1..1] for most FR backbones */
+
         fr_in[didx+c] = v*2.f - 1.f;
       }
     }
@@ -401,7 +360,6 @@ void fr_prepare_input_for_det(const od_pp_outBuffer_t *d,
 
   uint32_t t1 = HAL_GetTick();
 
-  /* quick stats & timing (kept; useful to spot NaNs) */
   {
     const int N = fr_w * fr_h * 3;
     float mn =  1e30f, mx = -1e30f, sum = 0.f; int nan_cnt = 0;
@@ -429,7 +387,6 @@ void fr_after_inference_and_decide(const float *emb_in_maybe_float, int emb_len,
   /* 2) Dequantize (if INT8) / Copy and sanity-check */
   static float emb_f[FR_EMB_SIZE];
 #if FR_OUT_IS_INT8
-  /* emb_in points to int8 memory in this build */
   fr_from_int8_to_unit((const int8_t*)emb_in_maybe_float, emb_f, n);
 #else
   for (int i=0;i<n;i++) emb_f[i] = emb_in_maybe_float[i];
@@ -441,14 +398,13 @@ void fr_after_inference_and_decide(const float *emb_in_maybe_float, int emb_len,
   if (!sane) {
     printf("[FR][ERR] embedding corrupt — skip (l2=%g mn=%g mx=%g mean=%g, n=%d)\n",
            (double)l2, (double)mn, (double)mx, (double)mean, n);
-    return; /* do not touch votes/state */
+    return;
   }
 
   /* 3) Enrollment path (centroid) */
   if (!g_enroll_done) {
-    if (!g_enroll_gate) return; /* external gate says not now */
+    if (!g_enroll_gate) return;
 
-    /* If we already have a couple samples, compare to running mean and drop outliers */
     if (g_me_count >= 2) {
       float tmp_centroid[FR_EMB_SIZE];
       for (int i=0;i<n;i++) tmp_centroid[i] = 0.f;
@@ -481,14 +437,10 @@ void fr_after_inference_and_decide(const float *emb_in_maybe_float, int emb_len,
     return;
   }
 
-  /* 4) Runtime verdict (cosine to centroid) */
   float sim_me = cosine_similarity(emb_f, g_me_centroid, n);
   g_last_sim = sim_me;
 
-  /* Feed into temporal stabilizer */
   fr_update_identity_state(sim_me, /*best_ref=*/0, det_idx);
-
-  /* Report stable decision */
   printf("[FR][VERDICT] det#%d sim=%.3f  thr_eff=%.3f (base=%.3f)  -> %s\n",
          det_idx, sim_me, fr_get_effective_threshold(), g_match_thr,
          g_last_is_match ? "MATCH" : "NO-MATCH");
@@ -532,7 +484,6 @@ static void fr_finalize_enrollment(int n)
   for (int i=0;i<n;i++) g_me_centroid[i] *= inv;
   fr_l2_normalize(g_me_centroid, n);
 
-  /* compute a personal threshold from sample similarities */
   float mu = 0.f, m2 = 0.f; int cnt = 0;
   for (int k=0;k<g_me_count;k++){
     float s = cosine_similarity(g_me_samples[k], g_me_centroid, n);
@@ -544,7 +495,6 @@ static void fr_finalize_enrollment(int n)
   float var = (cnt > 1) ? (m2 / (float)(cnt - 1)) : 0.f;
   float sd  = sqrtf(fmaxf(0.f, var));
 
-  /* personal thr = mu - 1.5*sd, clamped to [0.65 .. 0.90] */
   float thr_p = mu - 1.5f * sd;
   if (thr_p < 0.65f) thr_p = 0.65f;
   if (thr_p > 0.90f) thr_p = 0.90f;
@@ -561,17 +511,15 @@ void fr_update_identity_state(float sim, int best_ref, int det_idx)
 {
   fr_track_t *t = &g_track[det_idx & (FR_TRACK_MAX-1)];
 
-  /* init EMA to first observation */
   if (t->ema_sim == 0.f && t->below_cnt == 0 && t->is_known == 0) {
     t->ema_sim = sim;
   } else {
     t->ema_sim = FR_EMA_A * sim + (1.f - FR_EMA_A) * t->ema_sim;
   }
 
-  /* derive thresholds around effective threshold, but never stricter than FR_THR_ON */
   float thr_eff = fr_get_effective_threshold();
   float thr_on  = fmaxf(FR_THR_ON,  thr_eff);
-  float thr_off = fminf(FR_THR_OFF, thr_on - 0.02f); /* ensure some gap */
+  float thr_off = fminf(FR_THR_OFF, thr_on - 0.02f);
 
   if (!t->is_known) {
     if (t->ema_sim >= thr_on) {
@@ -590,13 +538,9 @@ void fr_update_identity_state(float sim, int best_ref, int det_idx)
     }
   }
 
-  /* Latch for external readers */
   g_last_is_match = t->is_known;
 }
 
-/* ==================== Optional: reference averaging helper ==================== */
-/* Use if you maintain multiple reference embeddings and want a prototype.
- * `set` must be an array of EmbRec { name, data, dim } with length n. */
 static void fr_average_refs(const void *set, int n, float *out)
 {
   const EmbRec *rs = (const EmbRec *)set;

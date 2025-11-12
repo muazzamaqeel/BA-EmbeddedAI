@@ -1,4 +1,4 @@
-// Src/aton_user_io_wrap.c  (FINAL)
+// Src/aton_user_io_wrap.c
 #include <stdint.h>
 #include "ll_aton_NN_interface.h"
 #include "ll_aton_runtime.h"
@@ -7,7 +7,6 @@
 extern void* __real_LL_ATON_Get_User_Input_Buffer_Default(uint32_t num);
 extern void* __real_LL_ATON_Get_User_Output_Buffer_Default(uint32_t num);
 
-/* -------- INPUT wrappers -------- */
 /* Make Set() fail so the app will memcpy into the default buffer. */
 LL_ATON_User_IO_Result_t __wrap_LL_ATON_Set_User_Input_Buffer_Default(uint32_t num, void* buffer, uint32_t size)
 {
@@ -21,7 +20,6 @@ void* __wrap_LL_ATON_Get_User_Input_Buffer_Default(uint32_t num)
   return __real_LL_ATON_Get_User_Input_Buffer_Default(num);
 }
 
-/* -------- OUTPUT wrappers -------- */
 /* Accept user output buffers so the runtime exports directly into them. */
 LL_ATON_User_IO_Result_t __wrap_LL_ATON_Set_User_Output_Buffer_Default(uint32_t num, void* buffer, uint32_t size)
 {
@@ -29,7 +27,6 @@ LL_ATON_User_IO_Result_t __wrap_LL_ATON_Set_User_Output_Buffer_Default(uint32_t 
   return LL_ATON_User_IO_NOERROR;
 }
 
-/* For completeness, forward Get() to the real runtime (rarely used now). */
 void* __wrap_LL_ATON_Get_User_Output_Buffer_Default(uint32_t num)
 {
   return __real_LL_ATON_Get_User_Output_Buffer_Default(num);
