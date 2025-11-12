@@ -429,12 +429,10 @@ static void crop_to_facerec_input_quant_from_detector_f32(
   if (mean_g > 1e-6f) gain_g = clampf(FR_BRIGHTEN_TARGET / mean_g, FR_BRIGHTEN_GAIN_MIN, FR_BRIGHTEN_GAIN_MAX);
   if (mean_b > 1e-6f) gain_b = clampf(FR_BRIGHTEN_TARGET / mean_b, FR_BRIGHTEN_GAIN_MIN, FR_BRIGHTEN_GAIN_MAX);
 
-  /* Decide whether to lift mids with gamma */
 #if FR_ENABLE_GAMMA
   if (mean_rgb < FR_GAMMA_THRESH) apply_gamma = FR_GAMMA;
 #endif
 
-  /* reset accumulators if dbg requested (so they reflect post-gain means) */
   if (dbg) { acc_r = acc_g = acc_b = 0.0; taps = 0; clamped = 0; }
 #endif /* FR_ENABLE_BRIGHTEN */
 
@@ -462,7 +460,6 @@ static void crop_to_facerec_input_quant_from_detector_f32(
       if (dbg) { acc_r += r; acc_g += g; acc_b += b; taps++; if (hit) clamped++; }
 
 #if FR_INPUT_IS_BGR
-      /* swap channels for FR only if requested */
       float tmp = r; r = b; b = tmp;
 #endif
 
@@ -506,16 +503,11 @@ static void crop_to_facerec_input_quant_from_detector_f32(
     dbg->mean_b = (float)(acc_b / denom2);
   }
 }
-
-/* Quick utility */
 static float l2_norm(const float *x, int n)
 {
   double s=0.0; for (int i=0;i<n;i++){ double v=x[i]; s+=v*v; }
   return (float)sqrt(s);
 }
-
-
-
 void pp_thread_fct(void *arg)
 {
 #if POSTPROCESS_TYPE == POSTPROCESS_OD_YOLO_V2_UF
@@ -525,14 +517,11 @@ void pp_thread_fct(void *arg)
 #elif POSTPROCESS_TYPE == POSTPROCESS_OD_YOLO_V8_UF || POSTPROCESS_TYPE == POSTPROCESS_OD_YOLO_V8_UI
   yolov8_pp_static_param_t pp_params;
 #elif POSTPROCESS_TYPE == POSTPROCESS_CUSTOM
-  /* BlazeFace: no static params */
 #else
 # error "PostProcessing type not supported"
 #endif
 
   const LL_Buffer_InfoTypeDef *nn_out_info = Detector_Out_Info();
-
-  /* Log detector outputs layout once (sanity check) */
   {
     for (int i = 0; i < NN_OUT_NB; ++i) {
       const char *nm = nn_out_info[i].name ? nn_out_info[i].name : "(null)";
@@ -551,10 +540,7 @@ void pp_thread_fct(void *arg)
   if (g_refset_ready < 0 || g_ref_set_count <= 0) {
       printf("[FR][ERR] Reference set not available (g_refset_ready=%d, count=%d)\r\n",
              g_refset_ready, g_ref_set_count);
-      // You can choose to block here or run with FR disabled
   }
-
-  // Optional: keep the audit/debug prints
   printf("[FR] Encrypted reference sets ready: %d\r\n", g_ref_set_count);
   if (g_ref_set_count > 0) {
       printf("[FR][DBG] First entry: %s, dim=%d, first bytes: ",

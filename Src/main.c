@@ -52,8 +52,8 @@
 #include "usb_embeddings.h"
 #include "app_ui_admin.h"
 #include "ui_fsm.h"
-#include "fatfs.h"                      // declares MX_FATFS_Init()
-#include "stm32n6570_discovery_sd.h"    // declares BSP_SD_Init(...)  (name may be *_sd.h or *_mmc.h on your BSP)
+#include "fatfs.h"
+#include "stm32n6570_discovery_sd.h"
 
 UART_HandleTypeDef huart1;
 
@@ -141,34 +141,23 @@ if (XSPI_NOR_Map_Once() != 0) {
       Error_Handler();
   }
 
-
-  /* ------------------------------------------------------------
-   * SD Card / Embeddings Initialization
-   * ------------------------------------------------------------ */
   printf("\r\n[MAIN] Initializing SD card...\r\n");
-
-  BSP_SD_Init(0);      // low-level SD init
-  MX_FATFS_Init();     // initialize FatFs stack
-  USB_SD_Test();       // mount + read embeddings files
+  BSP_SD_Init(0);
+  MX_FATFS_Init();
+  USB_SD_Test();
   printf("[MAIN] SD card check completed.\r\n\r\n");
   printf("[MAIN] Starting Refset Loader Task...\r\n");
-  FR_StartRefsetLoader();   // <-- add this line
-  /* ======================================================
-   * MAIN UI via FSM (no extra task)
-   * ====================================================== */
+  FR_StartRefsetLoader();
   printf("[MAIN] Initializing base application...\r\n");
-  app_run();                 // init your app (no threads yet)
-  APP_SleepMode_Init();      // prepare sleep system
+  app_run();
+  APP_SleepMode_Init();
 
   printf("[MAIN] Running UI FSM (blocking until pipeline starts)...\r\n");
   UI_FSM_Init();
-  UI_FSM_Run();              // blocks in UI loop; returns after Start → pipeline launched
-
-  /* Once the FSM returns, pipeline tasks are running; end this thread */
+  UI_FSM_Run();
   vTaskDelete(NULL);
 
 }
-
 
 __attribute__ ((section (".keep_me"))) void app_clean_invalidate_dbg()
 {

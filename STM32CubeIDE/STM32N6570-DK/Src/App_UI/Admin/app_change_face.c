@@ -28,7 +28,7 @@
 
 
 /* ===== Layout constants ===== */
-#define FACES_DIR_PATH      "0:faces"
+#define FACES_DIR_PATH      "0:binaries"
 #define MAX_USERS           16
 #define MAX_NAME_LEN        32
 
@@ -115,6 +115,8 @@ static void ReadUserListFromSD(void)
             const char *dot = strrchr(fno.fname, '.');
             if (dot && strcmp(dot, ".bin") == 0)
             {
+                /* Skip PIN files */
+                if (strstr(fno.fname, "_pin")) continue;
                 size_t len = (size_t)(dot - fno.fname);
                 if (len >= MAX_NAME_LEN) len = MAX_NAME_LEN - 1;
                 strncpy(g_usernames[g_user_count], fno.fname, len);
@@ -123,6 +125,7 @@ static void ReadUserListFromSD(void)
                 if (g_user_count >= MAX_USERS)
                     break;
             }
+
         }
     }
     f_closedir(&dir);
@@ -240,6 +243,7 @@ static void DeleteSelectedUsers(void)
     {
         if (g_selected[i])
         {
+            /* 1️⃣ Delete main .bin file */
             snprintf(path, sizeof(path), "%s/%s.bin", FACES_DIR_PATH, g_usernames[i]);
             FRESULT res = f_unlink(path);
             if (res == FR_OK)
@@ -251,17 +255,32 @@ static void DeleteSelectedUsers(void)
             {
                 printf("[UI] Failed to delete %s (err %d)\r\n", path, res);
             }
+
+            /* 2️⃣ Also delete matching _pin.bin (case-insensitive) */
+            snprintf(path, sizeof(path), "%s/%s_pin.bin", FACES_DIR_PATH, g_usernames[i]);
+            res = f_unlink(path);
+            if (res == FR_OK)
+            {
+                printf("[UI] Deleted PIN file %s\r\n", path);
+            }
+            else if (res != FR_NO_FILE)
+            {
+                printf("[UI] Failed to delete PIN file %s (err %d)\r\n", path, res);
+            }
         }
     }
 
+    /* Refresh table after deletion */
     ReadUserListFromSD();
     DrawFaceTable();
 
+    /* Feedback on screen */
     char msg[64];
-    snprintf(msg, sizeof(msg), "Deleted %d file(s)", deleted);
+    snprintf(msg, sizeof(msg), "Deleted %d user(s)", deleted);
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_DARKGREEN);
     UTIL_LCD_DisplayStringAt(0, BUTTON_Y - 35, (uint8_t*)msg, CENTER_MODE);
 }
+
 
 /* ===== Main function ===== */
 /* ===== Main function ===== */
