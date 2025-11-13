@@ -105,55 +105,74 @@ static void SleepMode_Task(void *arg)
 
     while (1)
     {
+        /* If counter disabled → nothing to do but sleep */
         if (!g_sleep_counter_enabled) {
-            vTaskDelay(pdMS_TO_TICKS(500));
+            vTaskDelay(pdMS_TO_TICKS(300));
             continue;
         }
+
+        /* Avoid entering sleep during pipeline or FR */
         if (g_pipeline_running || g_fr_active) {
-            vTaskDelay(pdMS_TO_TICKS(200));
+            vTaskDelay(pdMS_TO_TICKS(250));
             continue;
         }
+
+        /* Sleep override */
         if (g_sleep_disabled_override) {
-            vTaskDelay(pdMS_TO_TICKS(200));
+            vTaskDelay(pdMS_TO_TICKS(250));
             continue;
         }
+
+        /* Grace time after wake */
         if (!g_sleep_active && (HAL_GetTick() - g_wake_time) < WAKE_GRACE_MS) {
             prev_touch = false;
-            vTaskDelay(pdMS_TO_TICKS(50));
+            vTaskDelay(pdMS_TO_TICKS(150));
             continue;
         }
+
+        /* ============================
+         * ACTIVE MODE (screen on)
+         * ============================ */
         if (!g_sleep_active)
         {
             face_present_now = (HAL_GetTick() - g_last_face_time) < 500;
 
             if (!face_present_now)
             {
-                /* Enter sleep only after 7s inactivity and no new touch */
+                /* Enter sleep after 7s no-face & no touch */
                 if ((HAL_GetTick() - g_last_face_time) > 7000 &&
                     !touch_detected_since_last_sleep)
                 {
                     enter_sleep();
-                    prev_touch = false;  // reset touch edge
+                    prev_touch = false;
                 }
             }
+
+            /* CPU sleeps ~200 ms at a time */
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
         }
-        else
+
+        /* ============================
+         * SLEEP MODE (screen off)
+         * ============================ */
+        if (BSP_TS_GetState(0, &ts) == BSP_ERROR_NONE)
         {
-            if (BSP_TS_GetState(0, &ts) == BSP_ERROR_NONE)
+            bool edge = (ts.TouchDetected && !prev_touch);
+            prev_touch = ts.TouchDetected;
+
+            if (edge && !touch_detected_since_last_sleep)
             {
-                bool edge = (ts.TouchDetected && !prev_touch);
-                prev_touch = ts.TouchDetected;
-                if (edge && !touch_detected_since_last_sleep)
-                {
-                    touch_detected_since_last_sleep = true;
-                    exit_sleep();
-                }
+                touch_detected_since_last_sleep = true;
+                exit_sleep();
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(40));
+        /* Touch IRQ wakes CPU → 300ms delay is fine */
+        vTaskDelay(pdMS_TO_TICKS(300));
     }
 }
+
 
 /* ================================================================
  * Internal helpers

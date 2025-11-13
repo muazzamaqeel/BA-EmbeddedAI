@@ -163,3 +163,8 @@ __attribute__ ((section (".keep_me"))) void app_clean_invalidate_dbg()
 {
   SCB_CleanInvalidateDCache();
 }
+
+void vApplicationIdleHook(void)
+{
+    __WFI();   // CPU sleeps until next interrupt (touch, tick, etc.)
+}
