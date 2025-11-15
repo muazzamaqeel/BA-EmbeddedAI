@@ -61,6 +61,40 @@
 #include "face_recognition.h"
 #include "app_touch.h"
 #include "app_sleepmode.h"
+
+
+static StaticTask_t cpu_task_tcb;
+static StackType_t  cpu_task_stack[512];
+cpuload_info_t cpu_load;
+
+/* CPU load forward declarations */
+extern void cpuload_update(cpuload_info_t *cpu_load);
+extern void cpuload_get_info(cpuload_info_t *cpu_load,
+                             float *cpu_load_last,
+                             float *cpu_load_last_second,
+                             float *cpu_load_last_five_seconds);
+
+extern cpuload_info_t cpu_load;
+
+
+static void CPULoadLogger_Task(void *arg)
+{
+    (void)arg;
+
+    float load_last_sec;
+
+    while (1)
+    {
+        cpuload_update(&cpu_load);
+        cpuload_get_info(&cpu_load, NULL, &load_last_sec, NULL);
+
+        printf("CPU: %.1f%%\n", load_last_sec);
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+
 /* FaceRec dedicated thread */
 static StaticTask_t fr_thread;
 static StackType_t fr_thread_stack[2 * configMINIMAL_STACK_SIZE];
@@ -218,7 +252,6 @@ static int lcd_bg_buffer_capt_idx = 0;
 static uint8_t lcd_fg_buffer[2][LCD_FG_WIDTH * LCD_FG_HEIGHT* 2] ALIGN_32 IN_PSRAM;
 static int lcd_fg_buffer_rd_idx;
 display_t disp;
-static cpuload_info_t cpu_load;
 static uint8_t screen_buffer[LCD_BG_WIDTH * LCD_BG_HEIGHT * 2] ALIGN_32 IN_PSRAM;
 static uint8_t nn_input_buffers[2][NN_WIDTH * NN_HEIGHT * NN_BPP] ALIGN_32 IN_PSRAM;
 
@@ -268,7 +301,7 @@ static void cpuload_init(cpuload_info_t *cpu_load)
   memset(cpu_load, 0, sizeof(cpuload_info_t));
 }
 
-static void cpuload_update(cpuload_info_t *cpu_load)
+void cpuload_update(cpuload_info_t *cpu_load)
 {
   int i;
 
@@ -284,7 +317,7 @@ static void cpuload_update(cpuload_info_t *cpu_load)
     cpu_load->history[CPU_LOAD_HISTORY_DEPTH - 1 - i] = cpu_load->history[CPU_LOAD_HISTORY_DEPTH - 1 - i - 1];
 }
 
-static void cpuload_get_info(cpuload_info_t *cpu_load, float *cpu_load_last, float *cpu_load_last_second,
+void cpuload_get_info(cpuload_info_t *cpu_load, float *cpu_load_last, float *cpu_load_last_second,
                              float *cpu_load_last_five_seconds)
 {
   if (cpu_load_last)
@@ -1185,6 +1218,18 @@ static void vSleepDelayTask(void *argument)
 
 void app_start_pipeline(void)
 {
+
+
+	xTaskCreateStatic(
+	    CPULoadLogger_Task,
+	    "cpu_log",
+	    sizeof(cpu_task_stack) / sizeof(StackType_t),
+	    NULL,
+	    tskIDLE_PRIORITY + 1,     // Very low → does not disturb NN
+	    cpu_task_stack,
+	    &cpu_task_tcb
+	);
+
   printf("[APP] Starting camera and main pipeline threads...\r\n");
 
   UBaseType_t isp_priority = FREERTOS_PRIORITY(2);
