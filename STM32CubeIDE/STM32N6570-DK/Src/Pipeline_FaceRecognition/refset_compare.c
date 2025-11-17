@@ -9,16 +9,12 @@
 #include "stm32n6xx_hal.h"
 #include "cache_utils.h"
 #include "npu_guard.h"
-/* ---- This typedef MUST match the one in your Generated/embeddings_table.c ---- */
 typedef struct { const char* name; const float* data; int dim; } EmbRec;
-/* Externs provided by Generated/combined_refset.c */
 extern EmbRec* g_ref_set;
 extern int     g_ref_set_count;
 void FR_BuildCombinedRefset(void);
-/* FR output buffer discovery */
 extern const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 
-/* ---------------- utilities ---------------- */
 static float cosine_sim(const float *a, const float *b, int n)
 {
   /* robust FP accumulation */

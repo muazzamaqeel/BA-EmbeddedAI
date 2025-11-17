@@ -305,12 +305,6 @@ void UI_TestPassed_Show(void)
                         UTIL_LCD_Clear(UTIL_LCD_COLOR_TRANSPARENT);
                         BSP_LCD_SetLayerVisible(0, 1, ENABLE);
                         BSP_LCD_Reload(0, BSP_LCD_RELOAD_IMMEDIATE);
-
-                        /* -----------------------------
-                         * CRITICAL FIX
-                         * Restore sleep + pipeline state
-                         * -----------------------------
-                         */
                         APP_SleepMode_Enable();
                         APP_SleepMode_ResetState();
 

@@ -2,10 +2,8 @@
 #include <math.h>
 #include <string.h>
 #include <assert.h>
-
 #include "facedetection_imp.h"
 #include "app_shared.h"
-
 #include "npu_guard.h"
 #include "fr_helpers.h"
 #include "ll_aton_runtime.h"
@@ -14,18 +12,11 @@
 #include "app_cam.h"
 #include "cmw_camera.h"
 #include "facedetection_imp_bridge.h"
-// (only if this file uses DCACHE_*; if not, you can skip)
 #include "cache_utils.h"
 
 #ifndef CMW_MODE_CONTINUOUS
 #define CMW_MODE_CONTINUOUS DCMIPP_MODE_CONTINUOUS
 #endif
-
-/* ===== Global detector-brightening knobs (compile-time) =====
-   -DET_BRIGHTEN_GAIN=<float>   e.g. 1.2f  (default 1.0f)
-   -DET_BRIGHTEN_BIAS=<float>   e.g. 0.05f (default 0.0f)
-   -DET_BRIGHTEN_GAMMA=<float>  e.g. 1.0f..2.2f (default 1.0f; 1.0 = no gamma)
-*/
 #ifndef DET_BRIGHTEN_GAIN
 #define DET_BRIGHTEN_GAIN   1.0f
 #endif
