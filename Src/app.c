@@ -1,5 +1,5 @@
 #define MY_NAME "Muazzam"
-#define FR_SUBJECT_NAME MY_NAME   // <— add this so logs say “Muazzam”, not “ME”
+#define FR_SUBJECT_NAME MY_NAME
 #include "npu_guard.h"
 #include "fr_helpers.h"
 #include "app_shared.h"
@@ -7,9 +7,8 @@
 #include "cache_utils.h"
 #include "facedetection_imp_bridge.h"
 #include "facerecognition_imp.h"
-
-/* FaceRec dedicated user IO (non-aliased, PSRAM) */
-
+#include <stdbool.h>
+#include <stdint.h>   // ✅ add this
 
 /**
  ******************************************************************************
@@ -30,7 +29,7 @@
  */
 
 #include "app.h"
-#include "network.h"   // <-- REQUIRED for the macros & default buffers layout
+#include "network.h"
 #include "stm32n6570_discovery_xspi.h"
 #include <math.h>
 #include <stdint.h>
@@ -60,10 +59,50 @@
 #endif
 #include "utils.h"
 #include "face_recognition.h"
+#include "app_touch.h"
+#include "app_sleepmode.h"
+
+
+static StaticTask_t cpu_task_tcb;
+static StackType_t  cpu_task_stack[512];
+cpuload_info_t cpu_load;
+
+/* CPU load forward declarations */
+extern void cpuload_update(cpuload_info_t *cpu_load);
+extern void cpuload_get_info(cpuload_info_t *cpu_load,
+                             float *cpu_load_last,
+                             float *cpu_load_last_second,
+                             float *cpu_load_last_five_seconds);
+
+extern cpuload_info_t cpu_load;
+
+
+static void CPULoadLogger_Task(void *arg)
+{
+    (void)arg;
+
+    float load_last_sec;
+
+    while (1)
+    {
+        cpuload_update(&cpu_load);
+        cpuload_get_info(&cpu_load, NULL, &load_last_sec, NULL);
+
+        printf("CPU: %.1f%%\n", load_last_sec);
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+
 /* FaceRec dedicated thread */
 static StaticTask_t fr_thread;
 static StackType_t fr_thread_stack[2 * configMINIMAL_STACK_SIZE];
+
 TaskHandle_t g_fr_task = NULL;
+
+
+
 
 #if FR_IN_IS_UINT8
 static uint8_t g_fr_in_user [FR_IN_W * FR_IN_H * 3] ALIGN_32;
@@ -145,32 +184,27 @@ void Detector_Run(void) {
 #define LCD_FONT Font12
 #define BUTTON_TOGGLE_TRACKING BUTTON_USER
 #endif
-//static float g_last_frame[NN_WIDTH * NN_HEIGHT * 3] ALIGN_32 IN_PSRAM;
-/* Global handle so FaceRec can pause NN during extraction */
-TaskHandle_t g_nn_task = NULL;
 
-static void fr_thread_fct(void *arg)
+TaskHandle_t g_nn_task = NULL;
+extern uint8_t lcd_bg_buffer[DISPLAY_BUFFER_NB][LCD_BG_WIDTH * LCD_BG_HEIGHT * 2];
+uint8_t *APP_GetLcdBgBuffer0(void)
+{
+    return lcd_bg_buffer[0];
+}
+
+static void C_fct(void *arg)
 {
   (void)arg;
   while (1) {
-    // Wait until someone tells this thread to run
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-    // [Lock NPU because detector may also run]
     NPU_Lock(TAG_FR);
-
-    // Run Face Recognition on current face crop
     FaceRec_Run_NoLock();
-
-    // Postprocess: embeddings are now in g_fr_out_user
     printf("[FR] Embeddings ready: First val=%.3f\n", (float)g_fr_out_user[0] * (1.0f/128.0f));
 
     NPU_Unlock(TAG_FR);
   }
 }
 
-// --- XSPI1 HyperRAM: enable memory-mapped window @ 0x9000_0000 .. 0x90FF_FFFF
-/* app.c — disable duplicate HyperRAM mapping function */
 #if 0
 static int FR_HyperRAM_EnableMMAP(void)
 {
@@ -183,12 +217,7 @@ static int FR_HyperRAM_EnableMMAP(void)
 }
 #endif
 
-
 volatile char g_fr_overlay_label[32] = "";  /* text shown in the box */
-
-
-
-/* Globals */
 DECLARE_CLASSES_TABLE;
 /* Lcd Background area */
 static Rectangle_TypeDef lcd_bg_area = {
@@ -216,21 +245,14 @@ static const uint32_t colors[NUMBER_COLORS] = {
     UTIL_LCD_COLOR_BLUE,
     UTIL_LCD_COLOR_ORANGE
 };
-/* Lcd Background Buffer */
-static uint8_t lcd_bg_buffer[DISPLAY_BUFFER_NB][LCD_BG_WIDTH * LCD_BG_HEIGHT * 2] ALIGN_32 IN_PSRAM;
+
+uint8_t lcd_bg_buffer[DISPLAY_BUFFER_NB][LCD_BG_WIDTH * LCD_BG_HEIGHT * 2] ALIGN_32 IN_PSRAM;
 static int lcd_bg_buffer_disp_idx = 1;
 static int lcd_bg_buffer_capt_idx = 0;
-/* Lcd Foreground Buffer */
 static uint8_t lcd_fg_buffer[2][LCD_FG_WIDTH * LCD_FG_HEIGHT* 2] ALIGN_32 IN_PSRAM;
 static int lcd_fg_buffer_rd_idx;
 display_t disp;
-static cpuload_info_t cpu_load;
-/* screen buffer */
 static uint8_t screen_buffer[LCD_BG_WIDTH * LCD_BG_HEIGHT * 2] ALIGN_32 IN_PSRAM;
-
-
-/* nn input buffers */
-/* Camera NN pipe delivers RGB888: 128*128*3 = 49,152 bytes */
 static uint8_t nn_input_buffers[2][NN_WIDTH * NN_HEIGHT * NN_BPP] ALIGN_32 IN_PSRAM;
 
 
@@ -279,7 +301,7 @@ static void cpuload_init(cpuload_info_t *cpu_load)
   memset(cpu_load, 0, sizeof(cpuload_info_t));
 }
 
-static void cpuload_update(cpuload_info_t *cpu_load)
+void cpuload_update(cpuload_info_t *cpu_load)
 {
   int i;
 
@@ -295,7 +317,7 @@ static void cpuload_update(cpuload_info_t *cpu_load)
     cpu_load->history[CPU_LOAD_HISTORY_DEPTH - 1 - i] = cpu_load->history[CPU_LOAD_HISTORY_DEPTH - 1 - i - 1];
 }
 
-static void cpuload_get_info(cpuload_info_t *cpu_load, float *cpu_load_last, float *cpu_load_last_second,
+void cpuload_get_info(cpuload_info_t *cpu_load, float *cpu_load_last, float *cpu_load_last_second,
                              float *cpu_load_last_five_seconds)
 {
   if (cpu_load_last)
@@ -501,6 +523,13 @@ static void Display_NetworkOutput_NoTracking(display_info_t *info)
 {
   od_pp_outBuffer_t *rois = info->detects;
   uint32_t nb_rois = info->nb_detect;
+
+  if (nb_rois > 0) {
+      APP_SleepMode_UpdateFaceActivity(true);
+  } else {
+      APP_SleepMode_UpdateFaceActivity(false);
+  }
+
   float cpu_load_one_second;
   int line_nb = 0;
   float nn_fps;
@@ -651,14 +680,12 @@ static void Display_NetworkOutput_Tracking(display_info_t *info)
   line_nb += 1;
 #endif
 
-  /* Draw bounding boxes */
   for (i = 0; i < info->tboxes_valid_nb; i++)
     Display_TrackingBox(&info->tboxes[i]);
 }
 #else
 static void Display_NetworkOutput_Tracking(display_info_t *info)
 {
-  /* You should not be here */
   assert(0);
 }
 #endif
@@ -671,14 +698,6 @@ static void Display_NetworkOutput(display_info_t *info)
     Display_NetworkOutput_NoTracking(info);
 }
 
-
-
-
-
-
-/* Binds our user buffers to the generated FaceRec network using the lengths
- * that the runtime reports (so sizes always match the compiled model).      */
-
 static const char* aton_io_errstr(int r){
   if (r == LL_ATON_User_IO_NOERROR)     return "NOERROR";
   if (r == LL_ATON_User_IO_WRONG_INDEX) return "WRONG_INDEX";
@@ -686,13 +705,11 @@ static const char* aton_io_errstr(int r){
   return "?";
 }
 
-/* User buffers (already declared in your file) */
 extern uint8_t g_fr_in_user [FR_IN_W * FR_IN_H * 3];
 extern int8_t  g_fr_out_user[FR_EMB_SIZE];
 
 static bool FR_UserIO_InitAndBind(void)
 {
-  /* Ask the runtime what it really expects */
   const LL_Buffer_InfoTypeDef *exp_in  = LL_ATON_Input_Buffers_Info_face_recognition();
   const LL_Buffer_InfoTypeDef *exp_out = LL_ATON_Output_Buffers_Info_face_recognition();
   const uint32_t need_in  = LL_Buffer_len(&exp_in[0]);   /* expect 160*160*3 = 76800 */
@@ -704,7 +721,6 @@ static bool FR_UserIO_InitAndBind(void)
          (void*)g_fr_in_user,  (unsigned long)sizeof(g_fr_in_user),
          (void*)g_fr_out_user, (unsigned long)sizeof(g_fr_out_user));
 
-  /* Safety check: our arrays must be large enough */
   if (sizeof(g_fr_in_user)  < need_in  ||
       sizeof(g_fr_out_user) < need_out) {
     printf("[FR][ERR] user buffers too small (have_in=%lu need_in=%lu, have_out=%lu need_out=%lu)\r\n",
@@ -713,12 +729,10 @@ static bool FR_UserIO_InitAndBind(void)
     return false;
   }
 
-  /* Bind using the runtime-reported lengths */
   int r_in  = LL_ATON_Set_User_Input_Buffer_face_recognition (0, (void*)g_fr_in_user,  need_in);
   int r_out = LL_ATON_Set_User_Output_Buffer_face_recognition(0, (void*)g_fr_out_user, need_out);
   printf("[FR] bind IO: in=%s out=%s\r\n", aton_io_errstr(r_in), aton_io_errstr(r_out));
 
-  /* Re-check what the runtime actually uses (should be our pointers) */
   const LL_Buffer_InfoTypeDef *chk_in  = LL_ATON_Input_Buffers_Info_face_recognition();
   const LL_Buffer_InfoTypeDef *chk_out = LL_ATON_Output_Buffers_Info_face_recognition();
   void *p_in  = LL_Buffer_addr_start(&chk_in[0]);
@@ -736,29 +750,12 @@ static bool FR_UserIO_InitAndBind(void)
 }
 
 
-
-
-
-
-/* ============================== */
-/* nn_thread_fct — INTERNAL-IO    */
-/* - camera RGB/BGR888 -> f32     */
-/* - input stats (throttled)      */
-/* - proper cache maintenance     */
-/* ============================== */
-
-
-
-
-
-
-
 #ifdef TRACKER_MODULE
 static int TRK_Init()
 {
   const trk_conf_t cfg = {
     .track_thresh = 0.25f,
-    .det_thresh   = 0.60f,  /* was 0.80f; your det conf ~0.62–0.78 */
+    .det_thresh   = 0.60f,
     .sim1_thresh  = 0.80f,
     .sim2_thresh  = 0.50f,
     .tlost_cnt    = 30,
@@ -789,10 +786,6 @@ static int update_and_capture_tracking_enabled()
   return tracking_enabled;
 }
 
-
-
-
-
 static inline float clamp01f(float v){ return (v < 0.f) ? 0.f : (v > 1.f ? 1.f : v); }
 
 #ifdef TRACKER_MODULE
@@ -803,7 +796,6 @@ static int roi_to_dbox_safe(const od_pp_outBuffer_t *roi, trk_dbox_t *dbox)
       !isfinite(roi->width)    || !isfinite(roi->height)   ||
       !isfinite(roi->conf)) return 0;
 
-  /* center/size -> corners */
   float cx = clamp01f(roi->x_center);
   float cy = clamp01f(roi->y_center);
   float w  = fmaxf(roi->width ,  1e-4f);
@@ -811,11 +803,9 @@ static int roi_to_dbox_safe(const od_pp_outBuffer_t *roi, trk_dbox_t *dbox)
   float x0 = cx - 0.5f*w, y0 = cy - 0.5f*h;
   float x1 = cx + 0.5f*w, y1 = cy + 0.5f*h;
 
-  /* clip to [0,1] */
   x0 = fmaxf(0.f, x0); y0 = fmaxf(0.f, y0);
   x1 = fminf(1.f, x1); y1 = fminf(1.f, y1);
 
-  /* re-derive center/size (guaranteed positive) */
   w  = fmaxf(1e-4f, x1 - x0);
   h  = fmaxf(1e-4f, y1 - y0);
   cx = 0.5f * (x0 + x1);
@@ -830,28 +820,18 @@ static int roi_to_dbox_safe(const od_pp_outBuffer_t *roi, trk_dbox_t *dbox)
 }
 #endif
 
-
-
-
-
-
-
-
 #ifdef TRACKER_MODULE
 static int app_tracking(od_pp_out_t *pp)
 {
   int tracking_enabled = update_and_capture_tracking_enabled();
   if (!tracking_enabled) return 0;
-
-  /* Gate: accept only confident, reasonable faces */
-  const float TRK_CONF_MIN   = 0.60f;   /* same as TRK_Init det_thresh */
-  const float TRK_SIDE_MIN   = 0.20f;   /* min normalized side */
-  const float TRK_CENTER_TOL = 0.60f;   /* ignore far-corner ghosts */
+  const float TRK_CONF_MIN   = 0.60f;
+  const float TRK_SIDE_MIN   = 0.20f;
+  const float TRK_CENTER_TOL = 0.60f;
 
   int n_in  = (int)pp->nb_detect;
   if (n_in <= 0) return 1;
 
-  /* Optional: feed only the best detection to the tracker */
   int best_idx = -1;
   float best_score = -1.f;
   for (int i = 0; i < n_in; ++i) {
@@ -873,7 +853,6 @@ static int app_tracking(od_pp_out_t *pp)
     if (roi_to_dbox_safe(&pp->pOutBuff[best_idx], &dboxes[0])) used = 1;
   }
 
-  /* If nothing passed the gates, do not call the tracker this frame */
   if (used == 0) return 1;
 
   int ret = trk_update(&trk_ctx, used, dboxes);
@@ -887,13 +866,6 @@ static int app_tracking(od_pp_out_t *pp)
 static int app_tracking(od_pp_out_t *pp) { (void)pp; return 0; }
 #endif
 
-
-
-
-
-// [ADD - your enrollment database]
-// Fill these with your real 128-D embeddings (captured offline) and matching names.
-
 static const float g_ref_emb[][FR_EMB_SIZE] = {
   /* Example: paste your real vectors here */
   // { /* 512 floats */ },
@@ -904,8 +876,6 @@ static const char *g_ref_name[] = {
   // "Bob",
 };
 static const int g_ref_count = (int)(sizeof(g_ref_name)/sizeof(g_ref_name[0]));
-
-// [ADD - cosine similarity]
 static float cosine_similarity(const float *a, const float *b, int n)
 {
   float dot=0.f, na=0.f, nb=0.f;
@@ -914,9 +884,7 @@ static float cosine_similarity(const float *a, const float *b, int n)
   return dot / den;
 }
 
-// [ADD - clamp utility]
 static inline int clampi(int v, int lo, int hi){ return (v<lo)?lo:((v>hi)?hi:v); }
-
 // [ADD - crop+resize (bilinear) from detector input FP32 NHWC → FaceRec FP32 NHWC 112x112
 // src: FP32 NHWC in [0..1], size NN_WIDTH x NN_HEIGHT x 3
 // roi: od_pp_outBuffer_t (normalized cx,cy,w,h in [0..1])
@@ -957,7 +925,6 @@ static void crop_to_facerec_input_from_detector_input(
       sx0 = clampi(sx0, 0, src_w-1);
       sx1 = clampi(sx1, 0, src_w-1);
 
-      // sample 4 neighbors, NHWC
       int idx00 = (sy0*src_w + sx0)*3;
       int idx01 = (sy0*src_w + sx1)*3;
       int idx10 = (sy1*src_w + sx0)*3;
@@ -974,13 +941,11 @@ static void crop_to_facerec_input_from_detector_input(
                   src_nhwc[idx01+c]*w01 +
                   src_nhwc[idx10+c]*w10 +
                   src_nhwc[idx11+c]*w11;
-        // src is [0..1], convert to [-1..1] for most FR backbones:
         dst_nhwc[didx+c] = v*2.f - 1.f;
       }
     }
   }
 }
-
 
 #ifdef TRACKER_MODULE
 static void tbox_to_tbox_info(const trk_tbox_t *tbox, tbox_info *tinfo)
@@ -990,10 +955,6 @@ static void tbox_to_tbox_info(const trk_tbox_t *tbox, tbox_info *tinfo)
   tinfo->id = tbox->id;
 }
 #endif
-
-
-
-
 
 static inline float iou_norm_boxes(const od_pp_outBuffer_t *a, const od_pp_outBuffer_t *b)
 {
@@ -1010,9 +971,6 @@ static inline float iou_norm_boxes(const od_pp_outBuffer_t *a, const od_pp_outBu
   float uni = aarea + barea - inter + 1e-6f;
   return inter / uni;
 }
-
-
-
 
 static void dp_update_drawing_area()
 {
@@ -1096,7 +1054,7 @@ static void Display_init()
 #ifdef SCR_LIB_USE_SPI
     .format = SCRL_RGB565,
 #else
-    .format = SCRL_YUV422, /* Use SCRL_RGB565 if host support this format to reduce cpu load */
+    .format = SCRL_YUV422,
 #endif
     .address = screen_buffer,
     .fps = CAMERA_FPS,
@@ -1111,7 +1069,6 @@ static void Display_init()
   UTIL_LCD_SetFont(&LCD_FONT);
   UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
 }
-
 
 static void xspi_enable_mmap(void)
 {
@@ -1132,7 +1089,6 @@ static void xspi_enable_mmap(void)
     if (st != BSP_ERROR_NONE) { printf("XSPI1 mmap failed: %ld\r\n", (long)st); return; }
 }
 
-
 static int xspi_enable_mmap_auto(void)
 {
     BSP_XSPI_NOR_Init_t cfg = {0};
@@ -1146,7 +1102,7 @@ static int xspi_enable_mmap_auto(void)
     cfg.DualFlash     = BSP_XSPI_NOR_DUALFLASH_DISABLE;
 #endif
 
-    const int candidates[2] = {1, 0};  /* N6570-DK NOR is typically XSPI2 (index 1), fallback XSPI1 (0) */
+    const int candidates[2] = {1, 0};
     for (int t = 0; t < 2; ++t) {
         int inst = candidates[t];
         if (BSP_XSPI_NOR_Init(inst, &cfg) == BSP_ERROR_NONE) {
@@ -1162,14 +1118,13 @@ static int xspi_enable_mmap_auto(void)
     return -1;
 }
 
-
 static void xspi_quick_check(void)
 {
-  volatile const uint32_t *pA = (const uint32_t*)0x71000000u;  // Detector base
-  volatile const uint32_t *pB = (const uint32_t*)0x71028590u;  // some known word in detector
+  volatile const uint32_t *pA = (const uint32_t*)0x71000000u;
+  volatile const uint32_t *pB = (const uint32_t*)0x71028590u;
   volatile const uint32_t *pC = (const uint32_t*)0x71027FA0u;
 
-  volatile const uint32_t *fr0 = (const uint32_t*)0x71040000u; // FaceID base (your script)
+  volatile const uint32_t *fr0 = (const uint32_t*)0x71040000u;
   volatile const uint32_t *fr1 = (const uint32_t*)0x71040100u;
   volatile const uint32_t *fr2 = (const uint32_t*)0x71041000u;
 
@@ -1182,62 +1137,37 @@ static void xspi_quick_check(void)
   printf("[XSPI] 71041000: %08lX %08lX %08lX %08lX\r\n", fr2[0], fr2[1], fr2[2], fr2[3]);
 }
 
-
-
-
-
-
-
-void app_run()
+void app_init_pipeline(void)
 {
-  /* NOTE: NOR (weights) is mapped in main_thread_fct(). Do not map again here. */
+  printf("Init application (base only)\r\n");
 
-  /* RTOS priorities & handles */
-  UBaseType_t isp_priority = FREERTOS_PRIORITY(2);
-  UBaseType_t pp_priority  = FREERTOS_PRIORITY(-2);
-  UBaseType_t dp_priority  = FREERTOS_PRIORITY(-2);
-  UBaseType_t nn_priority  = FREERTOS_PRIORITY(1);
-  TaskHandle_t hdl;
-  int ret;
-
-  printf("Init application\n");
-
-  /* Enable DWT so DWT_CYCCNT works when debugger not attached */
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
 
-  /* Screen init */
   memset(lcd_bg_buffer, 0, sizeof(lcd_bg_buffer));
   CACHE_OP(SCB_CleanInvalidateDCache_by_Addr(lcd_bg_buffer, sizeof(lcd_bg_buffer)));
   memset(lcd_fg_buffer, 0, sizeof(lcd_fg_buffer));
   CACHE_OP(SCB_CleanInvalidateDCache_by_Addr(lcd_fg_buffer, sizeof(lcd_fg_buffer)));
   Display_init();
 
-  /* Queues */
+  int ret;
   ret = bqueue_init(&nn_input_queue, 2, (uint8_t *[2]){nn_input_buffers[0], nn_input_buffers[1]});  assert(ret == 0);
   ret = bqueue_init(&nn_output_queue, 2, (uint8_t *[2]){nn_output_buffers[0], nn_output_buffers[1]});assert(ret == 0);
 
 #ifdef TRACKER_MODULE
-  /* Tracker init + button */
   ret = TRK_Init();                                   assert(ret == 0);
   ret = BSP_PB_Init(BUTTON_TOGGLE_TRACKING, BUTTON_MODE_GPIO);
   assert(ret == BSP_ERROR_NONE);
 #endif
 
-  /* CPU load stats */
   cpuload_init(&cpu_load);
-
-  /* Camera */
   CAM_Init();
 
-  /* Semaphores + mutex */
   isp_sem     = xSemaphoreCreateCountingStatic(1, 0, &isp_sem_buffer);     assert(isp_sem);
   disp.update = xSemaphoreCreateCountingStatic(1, 0, &disp.update_buffer); assert(disp.update);
   disp.lock   = xSemaphoreCreateMutexStatic(&disp.lock_buffer);             assert(disp.lock);
 
-  /* Global NPU mutex/guard */
   npu_guard_init();
 
-  /* ---- Bind FaceRec dedicated, non-aliased user IO buffers (in PSRAM) ---- */
   printf("[FR] user buffers: IN=%p (len=%lu)  OUT=%p (len=%lu)\r\n",
          (void*)g_fr_in_user,  (unsigned long)sizeof(g_fr_in_user),
          (void*)g_fr_out_user, (unsigned long)sizeof(g_fr_out_user));
@@ -1252,7 +1182,6 @@ void app_run()
            "falling back to internal buffers (shadow copy + cache ops remain).\r\n");
   }
 
-  /* Report actual buffers the runtime uses (internal or user) */
   const LL_Buffer_InfoTypeDef *chk_in  = LL_ATON_Input_Buffers_Info_face_recognition();
   const LL_Buffer_InfoTypeDef *chk_out = LL_ATON_Output_Buffers_Info_face_recognition();
   void *p_in  = LL_Buffer_addr_start(&chk_in [0]);
@@ -1262,25 +1191,66 @@ void app_run()
          (unsigned long)LL_Buffer_len(&chk_in [0]),
          (unsigned long)LL_Buffer_len(&chk_out[0]));
 
-
-
   if (p_in == p_out) {
     printf("[FR][WARN] IN and OUT alias at %p — this network was exported in-place; "
            "we’ll keep using shadow copy + strict cache discipline.\r\n", p_in);
   }
 
-  /* FR init after I/O handling */
   fr_init();
   printf("[FR][CFG] input=%dx%d, out=%d (from face_recognition.h)\r\n",
          FR_IN_W, FR_IN_H, FR_EMB_SIZE);
   fr_set_subject(FR_SUBJECT_NAME);
   fr_set_match_threshold(0.80f);
 
+  APP_Touch_Init();
+}
+
+static StaticTask_t sleep_delay_tcb;
+static StackType_t  sleep_delay_stack[256];
+
+static void vSleepDelayTask(void *argument)
+{
+    (void)argument;
+    APP_SleepMode_EnableCounterDelayed(8000);  // 8s grace period
+    vTaskDelete(NULL);
+}
+
+
+void app_start_pipeline(void)
+{
+
+    if (g_pipeline_running) {
+        printf("[APP] Pipeline already running. Ignoring start.\r\n");
+        return;
+    }
+
+    printf("[APP] Starting camera + NN pipeline...\r\n");
+
+    g_pipeline_running = true;
+    g_fr_active = false;
+
+
+	xTaskCreateStatic(
+	    CPULoadLogger_Task,
+	    "cpu_log",
+	    sizeof(cpu_task_stack) / sizeof(StackType_t),
+	    NULL,
+	    tskIDLE_PRIORITY + 1,     // Very low → does not disturb NN
+	    cpu_task_stack,
+	    &cpu_task_tcb
+	);
+
+  printf("[APP] Starting camera and main pipeline threads...\r\n");
+
+  UBaseType_t isp_priority = FREERTOS_PRIORITY(2);
+  UBaseType_t pp_priority  = FREERTOS_PRIORITY(-2);
+  UBaseType_t dp_priority  = FREERTOS_PRIORITY(-2);
+  UBaseType_t nn_priority  = FREERTOS_PRIORITY(1);
+  TaskHandle_t hdl;
 
   /* Start LCD Display camera pipe stream */
   CAM_DisplayPipe_Start(lcd_bg_buffer[0], CMW_MODE_CONTINUOUS);
 
-  /* Threads */
   /* Threads */
   g_nn_task = xTaskCreateStatic(nn_thread_fct, "nn",
                                 configMINIMAL_STACK_SIZE * 2,
@@ -1288,7 +1258,6 @@ void app_run()
                                 nn_priority,
                                 nn_thread_stack, &nn_thread);
   assert(g_nn_task != NULL);
-
 
   hdl = xTaskCreateStatic(pp_thread_fct, "pp",
                           configMINIMAL_STACK_SIZE * 2,
@@ -1311,13 +1280,27 @@ void app_run()
                           isp_thread_stack, &isp_thread);
   assert(hdl != NULL);
 
+  printf("[APP] Pipeline threads started.\r\n");
+
+  /* Start wake grace period for sleep mode */
+  xTaskCreateStatic(
+      vSleepDelayTask, "SleepDelay",
+      sizeof(sleep_delay_stack) / sizeof(StackType_t),
+      NULL, tskIDLE_PRIORITY,
+      sleep_delay_stack, &sleep_delay_tcb
+  );
+
+  printf("[APP] Pipeline fully active.\r\n");
 }
 
-
-
-
-
-
+void app_run(void)
+{
+    printf("[APP] Base initialization only — pipeline not started yet.\r\n");
+    app_init_pipeline();
+    g_pipeline_running = false;
+    g_fr_active = false;
+    printf("[APP] System ready. Waiting for Start button.\r\n");
+}
 
 int CMW_CAMERA_PIPE_FrameEventCallback(uint32_t pipe)
 {
@@ -1335,4 +1318,45 @@ int CMW_CAMERA_PIPE_VsyncEventCallback(uint32_t pipe)
     app_main_pipe_vsync_event();
 
   return HAL_OK;
+}
+
+void APP_FaceDetection_Reset(void)
+{
+    printf("[APP] Face Detection reset requested (after PIN unlock)\r\n");
+    g_fr_overlay_label[0] = '\0';
+    UTIL_LCD_SetLayer(SCRL_LAYER_1);
+    UTIL_LCD_Clear(UTIL_LCD_COLOR_TRANSPARENT);
+
+#ifdef TRACKER_MODULE
+    TRK_Init();
+#endif
+    FR_ResetRecognitionState();
+    fr_clear_frame_snapshot();
+    //APP_SleepMode_Disable();
+    xTaskNotifyGive(g_nn_task);
+    printf("[APP] Detection pipeline resumed without camera restart.\r\n");
+}
+
+
+void app_stop_pipeline(void)
+{
+    if (!g_pipeline_running) {
+        printf("[APP] Pipeline already stopped.\r\n");
+        return;
+    }
+
+    printf("[APP] Stopping pipeline (camera + NN)...\r\n");
+
+    g_pipeline_running = false;
+    g_fr_active = false;
+
+    /* Stop NN tasks */
+    nn_stop_detector_thread();
+    nn_stop_facerec_thread();
+
+    /* Suspend camera */
+    CMW_CAMERA_Suspend(DCMIPP_PIPE1);
+    CMW_CAMERA_Suspend(DCMIPP_PIPE2);
+
+    printf("[APP] Pipeline stopped.\r\n");
 }

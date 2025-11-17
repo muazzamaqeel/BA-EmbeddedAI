@@ -1,0 +1,9 @@
+{
+  "Globals": {},
+  "Profiles": {
+    "default": {
+      "memory_pool": "C:/STM32_FaceRecognition/BA-EmbeddedAI/Model/FaceRecFiles/my_mpools/stm32n6_faceid_0x71040000.mpool",
+      "options": "--all-buffers-info --mvei --cache-maintenance --Ocache-opt --enable-virtual-mem-pools --Os --Oauto-sched --native-float"
+    }
+  }
+}

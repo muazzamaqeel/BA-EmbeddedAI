@@ -1,28 +1,24 @@
 /* Src/Pipeline_FaceRecognition/refset_compare.c
  * Compare current FaceRec embedding against a compiled-in reference set.
  */
-
 #include <stdint.h>
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
-
-#include "ll_aton_runtime.h"   /* LL_Buffer_* */
-#include "stm32n6xx_hal.h"     /* HAL_GetTick() */
-#include "cache_utils.h"       /* DCACHE_Invalidate */
-#include "npu_guard.h"         /* TAG_FR */
-
+#include "ll_aton_runtime.h"
+#include "stm32n6xx_hal.h"
+#include "cache_utils.h"
+#include "npu_guard.h"
 /* ---- This typedef MUST match the one in your Generated/embeddings_table.c ---- */
 typedef struct { const char* name; const float* data; int dim; } EmbRec;
-/* Externs provided by your Generated/embeddings_table.c */
-extern const EmbRec g_ref_set[];
-extern const int    g_ref_set_count;
-
+/* Externs provided by Generated/combined_refset.c */
+extern EmbRec* g_ref_set;
+extern int     g_ref_set_count;
+void FR_BuildCombinedRefset(void);
 /* FR output buffer discovery */
 extern const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 
 /* ---------------- utilities ---------------- */
-
 static float cosine_sim(const float *a, const float *b, int n)
 {
   /* robust FP accumulation */
@@ -42,8 +38,6 @@ static float cosine_sim(const float *a, const float *b, int n)
 static int min_int(int a, int b) { return (a < b) ? a : b; }
 
 /* ---------------- public API ---------------- */
-
-/* Print what’s compiled in */
 void FR_Refset_Summary(void)
 {
   printf("[REFSET] entries=%d\r\n", g_ref_set_count);
@@ -68,7 +62,7 @@ void FR_CompareRefset_FromCurrentOut(void)
   }
 
   void   *out_ptr = LL_Buffer_addr_start(&out_info[0]);
-  size_t  out_len = (size_t)LL_Buffer_len(&out_info[0]);   /* bytes */
+  size_t  out_len = (size_t)LL_Buffer_len(&out_info[0]);
   if (!out_ptr || out_len < sizeof(float)) {
     printf("[REFSET][ERR] FaceRec output buffer invalid (len=%lu).\r\n", (unsigned long)out_len);
     return;
@@ -87,10 +81,7 @@ void FR_CompareRefset_FromCurrentOut(void)
   for (int i = 0; i < g_ref_set_count; ++i) {
     const int dim = min_int(probe_dim, g_ref_set[i].dim);
     if (dim <= 0) continue;
-
     float s = cosine_sim(probe, g_ref_set[i].data, dim);
-
-    /* simple top-3 insertion */
     if (s > best_s) {
       third_s = second_s; third_i = second_i;
       second_s = best_s;  second_i = best_i;
@@ -102,17 +93,14 @@ void FR_CompareRefset_FromCurrentOut(void)
       third_s = s;        third_i = i;
     }
   }
-
   printf("[REFSET] probe_dim=%d  refs=%d\r\n", probe_dim, g_ref_set_count);
   if (best_i < 0) {
     printf("[REFSET][WARN] No valid comparisons performed.\r\n");
     return;
   }
-
   const char *n1 = (g_ref_set[best_i].name   && g_ref_set[best_i].name[0])   ? g_ref_set[best_i].name   : "(unnamed)";
   const char *n2 = (second_i >= 0 && g_ref_set[second_i].name && g_ref_set[second_i].name[0]) ? g_ref_set[second_i].name : "(none)";
   const char *n3 = (third_i  >= 0 && g_ref_set[third_i].name  && g_ref_set[third_i].name[0])  ? g_ref_set[third_i].name  : "(none)";
-
   printf("[REFSET] TOP-1: idx=%d name=%s  cos=%.4f\r\n", best_i,   n1, best_s);
   if (second_i >= 0) printf("[REFSET] TOP-2: idx=%d name=%s  cos=%.4f\r\n", second_i, n2, second_s);
   if (third_i  >= 0) printf("[REFSET] TOP-3: idx=%d name=%s  cos=%.4f\r\n", third_i,  n3, third_s);

@@ -18,7 +18,10 @@
 
 #ifndef APP_H
 #define APP_H
+#include <stdint.h>
 
 void app_run(void);
+uint8_t *APP_GetLcdBgBuffer0(void);
+void APP_FaceDetection_Reset(void);
 
 #endif

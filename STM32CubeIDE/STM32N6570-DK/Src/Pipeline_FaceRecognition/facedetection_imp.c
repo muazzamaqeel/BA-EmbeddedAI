@@ -38,75 +38,46 @@
 
 static inline float det_brighten_apply(float v01)
 {
-  /* Apply gain & bias in [0..1], then optional gamma, clamp at each step */
   float v = v01 * DET_BRIGHTEN_GAIN + DET_BRIGHTEN_BIAS;
   if (v < 0.f) v = 0.f; else if (v > 1.f) v = 1.f;
   if (DET_BRIGHTEN_GAMMA != 1.0f) {
-    /* powf is safe on [0..1]; gamma > 1 darkens mids, < 1 brightens mids */
     v = powf(v, DET_BRIGHTEN_GAMMA);
     if (v < 0.f) v = 0.f; else if (v > 1.f) v = 1.f;
   }
   return v;
 }
 
-/* ============================== */
-/* nn_thread_fct — INTERNAL-IO    */
-/* - camera RGB/BGR888 -> f32     */
-/* - input stats (throttled)      */
-/* - proper cache maintenance     */
-/* ============================== */
 void nn_thread_fct(void *arg)
 {
-  /* toggles */
   #define NN_LOG_INPUT_STATS       1
   #define NN_ONE_SHOT_SYNTH_TEST   0
-
-  /* input/layout */
   #define INPUT_IS_BGR 0
   #define PACK_AS_NCHW 0
-
-  /* Get model input buffer (internal, not user-allocated) */
   const LL_Buffer_InfoTypeDef *nn_in_info  = Detector_In_Info();
-
-  float    *aton_in     = (float *)LL_Buffer_addr_start(&nn_in_info[0]);   /* FP32 destination */
-  uint32_t  aton_in_len = LL_Buffer_len(&nn_in_info[0]);                   /* bytes, expect 196,608 */
-
+  float    *aton_in     = (float *)LL_Buffer_addr_start(&nn_in_info[0]);
+  uint32_t  aton_in_len = LL_Buffer_len(&nn_in_info[0]);
   const int PIX = (NN_WIDTH * NN_HEIGHT);
   const int CH  = 3;
   assert(aton_in != NULL);
   assert(aton_in_len == (uint32_t)(PIX * CH * sizeof(float)));
   assert(NN_BPP == 3); /* RGB888/BGR888 */
-
-  /* Start camera capture into our RGB888 byte buffers */
   uint8_t *nn_pipe_dst = bqueue_get_free(&nn_input_queue, 0);
   assert(nn_pipe_dst);
   CAM_NNPipe_Start(nn_pipe_dst, CMW_MODE_CONTINUOUS);
-
   uint32_t nn_period[2]; nn_period[1] = HAL_GetTick();
   uint32_t last_inp_print = 0;
-
-  /* Preprocess: map [0..255] -> [0..1] (BlazeFace/YOLO* expect [0..1]) */
   const float scale = 1.0f / 255.0f;
   const float bias  = 0.0f;
 
   while (1)
   {
-    /* Wait a captured frame (RGB888 bytes: NN_WIDTH*NN_HEIGHT*3) */
     uint8_t *capture_buffer = bqueue_get_ready(&nn_input_queue);
     assert(capture_buffer);
-
-    /* IMPORTANT: DMA wrote the frame -> invalidate before CPU reads */
     DCACHE_Invalidate(capture_buffer, NN_WIDTH * NN_HEIGHT * NN_BPP);
-
-    /* Reserve an output token to sync with pp thread */
     (void)bqueue_get_free(&nn_output_queue, 1);
-
-    /* compute NN period */
     nn_period[0] = nn_period[1];
     nn_period[1] = HAL_GetTick();
     uint32_t nn_period_ms = nn_period[1] - nn_period[0];
-
-    /* -------- RGB/BGR888 -> float32 -------- */
     {
       const uint8_t *src = capture_buffer;
 
@@ -124,7 +95,6 @@ void nn_thread_fct(void *arg)
     #if INPUT_IS_BGR
         float t = r; r = b; b = t;
     #endif
-        /* Normalize to [0..1] then apply detector-brightening */
         r = det_brighten_apply(r * scale + bias);
         g = det_brighten_apply(g * scale + bias);
         b = det_brighten_apply(b * scale + bias);
@@ -146,7 +116,6 @@ void nn_thread_fct(void *arg)
     #if INPUT_IS_BGR
         float t = r; r = b; b = t;
     #endif
-        /* Normalize to [0..1] then apply detector-brightening */
         r = det_brighten_apply(r * scale + bias);
         g = det_brighten_apply(g * scale + bias);
         b = det_brighten_apply(b * scale + bias);
@@ -162,10 +131,7 @@ void nn_thread_fct(void *arg)
       }
     #endif /* PACK_AS_NCHW */
 
-      /* cache clean: CPU wrote input, NPU will read it */
       DCACHE_Clean(aton_in, aton_in_len);
-
-      /* publish detector input snapshot to FR module (float NHWC [0..1]) */
       fr_update_frame_snapshot(aton_in, aton_in_len);
 
     #if NN_LOG_INPUT_STATS
@@ -193,17 +159,14 @@ void nn_thread_fct(void *arg)
       }
     }
 
-    /* inference (serialize on NPU) */
     uint32_t ts = HAL_GetTick();
-    Detector_Run();                  // Detector_Run() handles NPU lock/unlock
+    Detector_Run();
     uint32_t inf_ms = HAL_GetTick() - ts;
     printf("[TIM] NN  infer took %lums\r\n", (unsigned long)inf_ms);
 
-    /* Return camera buffer and wake postprocess */
     bqueue_put_free(&nn_input_queue);
     bqueue_put_ready(&nn_output_queue);
 
-    /* publish stats to display (pp thread will fill boxes & signal update) */
     int ret = xSemaphoreTake(disp.lock, portMAX_DELAY);  assert(ret == pdTRUE);
     disp.info.inf_ms = inf_ms;
     disp.info.nn_period_ms = nn_period_ms;

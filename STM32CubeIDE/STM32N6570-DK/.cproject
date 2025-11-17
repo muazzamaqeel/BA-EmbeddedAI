@@ -14,7 +14,7 @@
 				</extensions>
 			</storageModule>
 			<storageModule moduleId="cdtBuildSystem" version="4.0.0">
-				<configuration artifactExtension="elf" artifactName="${ProjName}" buildArtefactType="org.eclipse.cdt.build.core.buildArtefactType.exe" buildProperties="org.eclipse.cdt.build.core.buildArtefactType=org.eclipse.cdt.build.core.buildArtefactType.exe,org.eclipse.cdt.build.core.buildType=org.eclipse.cdt.build.core.buildType.debug" cleanCommand="rm -rf" description="" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.config.exe.debug.1867675435" name="Debug" parent="com.st.stm32cube.ide.mcu.gnu.managedbuild.config.exe.debug">
+				<configuration artifactExtension="elf" artifactName="${ProjName}" buildArtefactType="org.eclipse.cdt.build.core.buildArtefactType.exe" buildProperties="org.eclipse.cdt.build.core.buildArtefactType=org.eclipse.cdt.build.core.buildArtefactType.exe,org.eclipse.cdt.build.core.buildType=org.eclipse.cdt.build.core.buildType.debug" cleanCommand="rm -rf" description="" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.config.exe.debug.1867675435" name="Debug" parent="com.st.stm32cube.ide.mcu.gnu.managedbuild.config.exe.debug" prebuildStep="">
 					<folderInfo id="com.st.stm32cube.ide.mcu.gnu.managedbuild.config.exe.debug.1867675435." name="/" resourcePath="">
 						<toolChain id="com.st.stm32cube.ide.mcu.gnu.managedbuild.toolchain.exe.debug.178256165" name="MCU ARM GCC" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.toolchain.exe.debug">
 							<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.target_mcu.560087862" name="MCU" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.target_mcu" useByScannerDiscovery="true" value="STM32N657X0HxQ" valueType="string"/>
@@ -105,8 +105,8 @@
 									<listOptionValue builtIn="false" value="TRACKER_MODULE"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.includepaths.1227356004" name="Include paths (-I)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.includepaths" useByScannerDiscovery="false" valueType="includePath">
-									<listOptionValue builtIn="false" value="&quot;C:\STM32_FaceRecognition\BA-EmbeddedAI\Model\FaceRecFiles\st_ai_output\header&quot;"/>
-									<listOptionValue builtIn="false" value="&quot;C:\Users\Muazzam\Downloads\x-cube-n6-ai-people-detection-tracking-main\FD\x-cube-n6-ai-people-detection-tracking-main\Model\st_ai_output_blazeface&quot;"/>
+									<listOptionValue builtIn="false" value="../../../Model/FaceRecFiles/st_ai_output/header"/>
+									<listOptionValue builtIn="false" value="../../../Model/dectection/st_ai_output_blazeface"/>
 									<listOptionValue builtIn="false" value="../../../Inc"/>
 									<listOptionValue builtIn="false" value="../../../STM32Cube_FW_N6/Drivers/STM32N6xx_HAL_Driver/Inc"/>
 									<listOptionValue builtIn="false" value="../../../STM32Cube_FW_N6/Drivers/STM32N6xx_HAL_Driver/Inc/Legacy"/>
@@ -133,6 +133,15 @@
 									<listOptionValue builtIn="false" value="../../../Lib/screenl/Inc"/>
 									<listOptionValue builtIn="false" value="../../../Lib/tracker"/>
 									<listOptionValue builtIn="false" value="../../../Model/FaceRec/facerec_out"/>
+									<listOptionValue builtIn="false" value="../../../STM32Cube_FW_N6/Drivers/BSP/Components/gt911"/>
+									<listOptionValue builtIn="false" value="../../../Lib/crypto"/>
+									<listOptionValue builtIn="false" value="../../../Lib/crypto/tinyAES"/>
+									<listOptionValue builtIn="false" value="../Lib/FatFs/src"/>
+									<listOptionValue builtIn="false" value="../Lib/FatFs/Target"/>
+									<listOptionValue builtIn="false" value="../Lib/FatFs/App"/>
+									<listOptionValue builtIn="false" value="../Lib/STCryptoLib/Lib"/>
+									<listOptionValue builtIn="false" value="../Lib/STCryptoLib/Inc"/>
+									<listOptionValue builtIn="false" value="../Lib/STCryptoLib/Inc/cipher"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.otherflags.315856049" name="Other flags" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.otherflags" useByScannerDiscovery="true" valueType="stringList">
 									<listOptionValue builtIn="false" value=""/>
@@ -147,6 +156,7 @@
 								<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.script.785869104" name="Linker Script (-T)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.script" value="../../../Gcc/STM32N657xx.ld" valueType="string"/>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.libraries.545068067" name="Libraries (-l)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.libraries" valueType="libs">
 									<listOptionValue builtIn="false" value="c"/>
+									<listOptionValue builtIn="false" value="STM32Cryptographic_CM33"/>
 									<listOptionValue builtIn="false" value="m"/>
 									<listOptionValue builtIn="false" value="nosys"/>
 									<listOptionValue builtIn="false" value=":NetworkRuntime1020_CM55_GCC.a"/>
@@ -155,6 +165,7 @@
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.directories.1331800573" name="Library search path (-L)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.directories" valueType="libPaths">
 									<listOptionValue builtIn="false" value="../../../Lib/AI_Runtime/Lib/GCC/ARMCortexM55"/>
+									<listOptionValue builtIn="false" value="C:/STM32_FaceRecognition/BA-EmbeddedAI/STM32CubeIDE/STM32N6570-DK/Lib/STCryptoLib/Lib"/>
 									<listOptionValue builtIn="false" value="../../../Lib/Camera_Middleware/ISP_Library/evision/Lib"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.otherflags.9191462" name="Other flags" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.otherflags" valueType="stringList">
@@ -181,7 +192,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="Src/Pipeline_FaceRecognition/UserFace/Automation|Lib/AI_Runtime/Npu/ll_aton/ll_aton_osal_rtos_template.c|Lib/ai-postprocessing-wrapper/app_postprocess_od_st_yolox_uf.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+						<entry excluding="Src/Pipeline_FaceRecognition/UserFace|Src/Pipeline_FaceRecognition/Generated/combined_refset.c|Src/Pipeline_FaceRecognition/Generated/embeddings_table_Aida.c|Src/Pipeline_FaceRecognition/Generated/embeddings_table_Muazzam.c|Src/Pipeline_FaceRecognition/Generated/embeddings_table_Keti.c|Src/Pipeline_FaceRecognition/UserFace/Automation|Lib/ai-postprocessing-wrapper/app_postprocess_od_st_yolox_uf.c|Src/App_UI/Resources|Lib/AI_Runtime/Npu/ll_aton/ll_aton_osal_rtos_template.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>

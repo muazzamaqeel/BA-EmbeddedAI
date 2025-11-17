@@ -30,7 +30,6 @@
 //   FR_GAMMA=0.92f                (lift mids if dim)
 //   FR_GAMMA_THRESH=0.45f         (apply gamma if meanRGB < thresh)
 //
-// NOTE: FR output is INT8 (scale≈1/128, zp=0). That part stays unchanged.
 
 #include <stdio.h>
 #include <string.h>
@@ -38,26 +37,26 @@
 #include <stddef.h>
 #include <math.h>
 #include <assert.h>
-
-/* STM32 / RTOS */
 #include "stm32n6xx_hal.h"
 #include "FreeRTOS.h"
 #include "semphr.h"
+#include "app_config.h"
+#include "network.h"
+#include "cache_utils.h"
+#include "npu_guard.h"
+#include "ll_aton_runtime.h"
+#include "app_shared.h"
+#include "app_postprocess.h"
+#include "fr_helpers.h"
+#include "face_recognition.h"
+#include "facerecognition_imp.h"
+#include "app_ui_pin.h"
+#include "app_ui_pin_face_rec.h"
+#include "crypto_utils.h"
+#include "refset_bin.h"
+#include "app_change_pin.h"
+#include "app_shared.h"
 
-/* App & runtime */
-#include "app_config.h"               // POSTPROCESS_TYPE, etc.
-#include "network.h"                  // NN_* macros (NN_OUT_NB, NN_WIDTH/HEIGHT, etc.)
-#include "cache_utils.h"              // DCACHE_* helpers
-#include "npu_guard.h"                // NPU_Lock / TAG_FR
-#include "ll_aton_runtime.h"          // LL_Buffer_*, HAL bindings
-#include "app_shared.h"               // display_t, bqueue_t, od types (via postproc), prototypes
-#include "app_postprocess.h"          // od_pp_out_t / od_pp_outBuffer_t, app_postprocess_*()
-#include "fr_helpers.h"               // helpers (frame snapshot, etc.)
-#include "face_recognition.h"         // FR_IN_W/H, FR_EMB_SIZE, FR_IN_IS_UINT8
-#include "facerecognition_imp.h"      // pp_thread_fct declaration
-
-/* If the generated header that declares these isn't included by your BSP,
- * keep these forward decls to avoid implicit-decl warnings. */
 const LL_Buffer_InfoTypeDef *LL_ATON_Input_Buffers_Info_face_recognition(void);
 const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 
@@ -65,29 +64,25 @@ const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 #define MIN(a,b) (( (a) < (b) ) ? (a) : (b))
 #endif
 
-/* ====== Build-time knobs (override via -D at compile) ====== */
-/* Default to the model-generated quant choice unless caller overrides. */
 #ifndef FR_INPUT_IS_U8
-#define FR_INPUT_IS_U8  FR_IN_IS_UINT8  /* 0 = I8 symmetric input; 1 = U8 zp=127 input */
+#define FR_INPUT_IS_U8  FR_IN_IS_UINT8
 #endif
 #ifndef FR_INPUT_IS_BGR
-#define FR_INPUT_IS_BGR 0              /* 0=RGB (default), 1=BGR swap for FR only */
+#define FR_INPUT_IS_BGR 0
 #endif
 
-/* Quantization params for U8 input (match TFLite: scale=1/128, zp=127) */
 #ifndef FR_IN_INV_SCALE
-#define FR_IN_INV_SCALE  128.0f   /* 1 / 0.0078125f */
+#define FR_IN_INV_SCALE  128.0f
 #endif
 #ifndef FR_IN_ZP
 #define FR_IN_ZP         127.0f
 #endif
 
-/* Optional: per-channel brightness normalization for dim scenes (two-pass). */
 #ifndef FR_ENABLE_BRIGHTEN
 #define FR_ENABLE_BRIGHTEN       1
 #endif
 #ifndef FR_BRIGHTEN_TARGET
-#define FR_BRIGHTEN_TARGET       0.50f   /* aim mid-gray in [0..1] (≈127 for U8) */
+#define FR_BRIGHTEN_TARGET       0.50f
 #endif
 #ifndef FR_BRIGHTEN_GAIN_MIN
 #define FR_BRIGHTEN_GAIN_MIN     0.80f
@@ -100,7 +95,7 @@ const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 #define FR_ENABLE_GAMMA          1
 #endif
 #ifndef FR_GAMMA
-#define FR_GAMMA                 0.92f   /* <1 brightens mids */
+#define FR_GAMMA                 0.92f
 #endif
 #ifndef FR_GAMMA_THRESH
 #define FR_GAMMA_THRESH          0.45f
@@ -115,13 +110,13 @@ const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 #endif
 
 #ifndef FR_MATCH_THR
-#define FR_MATCH_THR    0.50f
+#define FR_MATCH_THR    0.65f
 #endif
 #ifndef FR_THR_ON
-#define FR_THR_ON       FR_MATCH_THR
+#define FR_THR_ON       0.65f
 #endif
 #ifndef FR_THR_OFF
-#define FR_THR_OFF      0.40f
+#define FR_THR_OFF      0.60f
 #endif
 #ifndef FR_LOCK_FORGET_FRAMES
 #define FR_LOCK_FORGET_FRAMES  15
@@ -153,17 +148,14 @@ const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 #define FR_EMA_ALPHA         0.70f
 #endif
 
-/* Debug cadence (ms) for verbose prints */
 #ifndef DBG_EVERY_MS
 #define DBG_EVERY_MS  2000U
 #endif
 
-/* Reference set quick audit prints */
 #ifndef DBG_AUDIT_REFSET
 #define DBG_AUDIT_REFSET  1
 #endif
 
-/* Additional per-frame prints (set to 0 to reduce noise) */
 #ifndef DBG_PRINT_TOPK
 #define DBG_PRINT_TOPK  1
 #endif
@@ -177,25 +169,75 @@ const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 #define DBG_PRINT_ROI  1
 #endif
 
-/* Prototypes provided elsewhere */
 const LL_Buffer_InfoTypeDef *Detector_In_Info(void);
 const LL_Buffer_InfoTypeDef *Detector_Out_Info(void);
 void FaceRec_Run_NoLock(void);
 
-/* Globals defined in app.c that we use here */
 extern bqueue_t nn_output_queue;
 extern display_t disp;
 extern volatile char g_fr_overlay_label[32];
 
-/* ---- Reference set compiled in Generated/embeddings_table.c ---- */
-typedef struct { const char* name; const float* data; int dim; } EmbRec;
-extern const EmbRec g_ref_set[];
-extern const int    g_ref_set_count;
+typedef struct {
+  char  name[32];
+  float score;
+  int   bad_frames;
+  int   locked;
+} id_lock_t;
+static id_lock_t lock = {{0}, 0.0f, 0, 0};
+extern char g_decrypted_pin[8];
+
+typedef struct {
+  od_pp_outBuffer_t roi;
+  int   have;
+  int   visible_count;
+  int   missing_count;
+  uint32_t last_seen_ms;
+} primary_t;
+static primary_t primary = {0};
+
+const float     ACCEPT_CONF_MIN  = FR_ACCEPT_CONF_MIN;
+const float     ACCEPT_SIDE_MIN  = FR_ACCEPT_SIDE_MIN;
+const float     CENTER_TOL       = FR_CENTER_TOL;
+const float     SCORE_SIDE_REF   = FR_SCORE_SIDE_REF;
+const float     STABLE_IOU_MIN   = FR_STABLE_IOU_MIN;
+const int       HOLD_MISS_FRAMES = FR_HOLD_MISS_FRAMES;
+const float     EMA_ALPHA        = FR_EMA_ALPHA;
+
+/* FR throttling & thresholds */
+uint32_t last_fr_ms = 0;
+const uint32_t FR_PERIOD = FR_PERIOD_MS;
+const float    THR_ON    = FR_THR_ON;
+const float    THR_OFF   = FR_THR_OFF;
+
+uint32_t last_dbg_ms = 0;
+float prev_emb[FR_EMB_SIZE]; int have_prev = 0;
+static volatile bool g_pin_session_active = false;
+static uint32_t      g_last_unlock_ms     = 0;
+static int           g_stable_count       = 0;
+static char          last_name[32]        = {0};
 
 /* ---------------- helpers ---------------- */
-
 static inline int clampi(int v, int lo, int hi){ return (v<lo)?lo:((v>hi)?hi:v); }
 static inline float clampf(float v, float lo, float hi){ return (v<lo)?lo:((v>hi)?hi:v); }
+
+void FR_ResetRecognitionState(void)
+{
+    printf("[FR][RESET] Clearing recognition and tracking state...\r\n");
+
+    g_fr_overlay_label[0] = '\0';
+
+    memset((void*)&primary, 0, sizeof(primary));
+    memset((void*)&lock, 0, sizeof(lock));
+
+    have_prev = 0;
+    memset((void*)prev_emb, 0, sizeof(prev_emb));
+
+    memset((void*)last_name, 0, sizeof(last_name));
+    g_stable_count = 0;
+    g_pin_session_active = false;
+
+    printf("[FR][RESET] State cleared — ready for new face input.\r\n");
+}
 
 static float cosine_sim(const float *a, const float *b, int n)
 {
@@ -228,15 +270,13 @@ static inline float iou_norm_boxes(const od_pp_outBuffer_t *a, const od_pp_outBu
   return inter / uni;
 }
 
-/* Debug metrics for cropping */
 typedef struct {
-  float x0, y0, x1, y1;     /* crop window in pixels */
-  float side, roi_w, roi_h; /* side after margin, raw roi dims */
-  int   taps, taps_clamped; /* how many bilinear taps hit image border */
-  float mean_r, mean_g, mean_b; /* pre-quant means in [0..1] */
+  float x0, y0, x1, y1;
+  float side, roi_w, roi_h;
+  int   taps, taps_clamped;
+  float mean_r, mean_g, mean_b;
 } CropDbg;
 
-/* ---- Bilinear sampler (RGB from NHWC [0..1]) ---- */
 static inline void bilinear_rgb_sample(
     const float *src_nhwc, int src_w, int src_h,
     float fx, float fy,
@@ -288,7 +328,7 @@ static inline void bilinear_rgb_sample(
 static void crop_to_facerec_input_quant_from_detector_f32(
     const float *src_nhwc,  int src_w, int src_h,
     const od_pp_outBuffer_t *roi,
-    float margin,           /* e.g. 0.20f = +20% */
+    float margin,
 #if FR_INPUT_IS_U8
     uint8_t *dst,
 #else
@@ -341,12 +381,10 @@ static void crop_to_facerec_input_quant_from_detector_f32(
   if (mean_g > 1e-6f) gain_g = clampf(FR_BRIGHTEN_TARGET / mean_g, FR_BRIGHTEN_GAIN_MIN, FR_BRIGHTEN_GAIN_MAX);
   if (mean_b > 1e-6f) gain_b = clampf(FR_BRIGHTEN_TARGET / mean_b, FR_BRIGHTEN_GAIN_MIN, FR_BRIGHTEN_GAIN_MAX);
 
-  /* Decide whether to lift mids with gamma */
 #if FR_ENABLE_GAMMA
   if (mean_rgb < FR_GAMMA_THRESH) apply_gamma = FR_GAMMA;
 #endif
 
-  /* reset accumulators if dbg requested (so they reflect post-gain means) */
   if (dbg) { acc_r = acc_g = acc_b = 0.0; taps = 0; clamped = 0; }
 #endif /* FR_ENABLE_BRIGHTEN */
 
@@ -374,7 +412,6 @@ static void crop_to_facerec_input_quant_from_detector_f32(
       if (dbg) { acc_r += r; acc_g += g; acc_b += b; taps++; if (hit) clamped++; }
 
 #if FR_INPUT_IS_BGR
-      /* swap channels for FR only if requested */
       float tmp = r; r = b; b = tmp;
 #endif
 
@@ -418,22 +455,11 @@ static void crop_to_facerec_input_quant_from_detector_f32(
     dbg->mean_b = (float)(acc_b / denom2);
   }
 }
-
-/* Quick utility */
 static float l2_norm(const float *x, int n)
 {
   double s=0.0; for (int i=0;i<n;i++){ double v=x[i]; s+=v*v; }
   return (float)sqrt(s);
 }
-
-/* Hysteresis lock for identity */
-typedef struct {
-  char  name[32];
-  float score;
-  int   bad_frames;
-  int   locked;
-} id_lock_t;
-
 void pp_thread_fct(void *arg)
 {
 #if POSTPROCESS_TYPE == POSTPROCESS_OD_YOLO_V2_UF
@@ -443,14 +469,11 @@ void pp_thread_fct(void *arg)
 #elif POSTPROCESS_TYPE == POSTPROCESS_OD_YOLO_V8_UF || POSTPROCESS_TYPE == POSTPROCESS_OD_YOLO_V8_UI
   yolov8_pp_static_param_t pp_params;
 #elif POSTPROCESS_TYPE == POSTPROCESS_CUSTOM
-  /* BlazeFace: no static params */
 #else
 # error "PostProcessing type not supported"
 #endif
 
   const LL_Buffer_InfoTypeDef *nn_out_info = Detector_Out_Info();
-
-  /* Log detector outputs layout once (sanity check) */
   {
     for (int i = 0; i < NN_OUT_NB; ++i) {
       const char *nm = nn_out_info[i].name ? nn_out_info[i].name : "(null)";
@@ -459,6 +482,26 @@ void pp_thread_fct(void *arg)
              i, nm, blen, blen / (unsigned long)sizeof(float));
     }
   }
+
+
+  printf("[FR] Waiting for reference set from SD task...\r\n");
+  while (g_refset_ready == 0) {
+      vTaskDelay(pdMS_TO_TICKS(100));
+  }
+
+  if (g_refset_ready < 0 || g_ref_set_count <= 0) {
+      printf("[FR][ERR] Reference set not available (g_refset_ready=%d, count=%d)\r\n",
+             g_refset_ready, g_ref_set_count);
+  }
+  printf("[FR] Encrypted reference sets ready: %d\r\n", g_ref_set_count);
+  if (g_ref_set_count > 0) {
+      printf("[FR][DBG] First entry: %s, dim=%d, first bytes: ",
+             g_ref_set[0].name, g_ref_set[0].dim);
+      for (int i = 0; i < 8 && i < g_ref_set[0].dim; ++i)
+          printf("%.4f ", g_ref_set[0].data[i]);
+      printf("\r\n");
+  }
+
 
   void *pp_input[NN_OUT_NB];
   uint32_t pp_len[NN_OUT_NB];
@@ -518,39 +561,6 @@ void pp_thread_fct(void *arg)
   }
 #endif
 
-  /* Simple stabilizer for a single primary box */
-  typedef struct {
-    od_pp_outBuffer_t roi;
-    int   have;
-    int   visible_count;
-    int   missing_count;
-    uint32_t last_seen_ms;
-  } primary_t;
-  static primary_t primary = {0};
-
-  /* selection/stabilization knobs (local consts for clarity) */
-  const float     ACCEPT_CONF_MIN  = FR_ACCEPT_CONF_MIN;
-  const float     ACCEPT_SIDE_MIN  = FR_ACCEPT_SIDE_MIN;
-  const float     CENTER_TOL       = FR_CENTER_TOL;
-  const float     SCORE_SIDE_REF   = FR_SCORE_SIDE_REF;
-  const float     STABLE_IOU_MIN   = FR_STABLE_IOU_MIN;
-  const int       HOLD_MISS_FRAMES = FR_HOLD_MISS_FRAMES;
-  const float     EMA_ALPHA        = FR_EMA_ALPHA;
-
-  /* FR throttling & thresholds */
-  uint32_t last_fr_ms = 0;
-  const uint32_t FR_PERIOD = FR_PERIOD_MS;
-  const float    THR_ON    = FR_THR_ON;
-  const float    THR_OFF   = FR_THR_OFF;
-
-  /* Debug cadence */
-  uint32_t last_dbg_ms = 0;
-
-  /* Previous embedding for self-consistency */
-  float prev_emb[FR_EMB_SIZE]; int have_prev = 0;
-
-  /* Identity lock */
-  static id_lock_t lock = {{0}, 0.0f, 0, 0};
 
   while (1)
   {
@@ -577,7 +587,7 @@ void pp_thread_fct(void *arg)
 
     uint32_t now = nn_pp[1];
 
-    /* -------- choose ONE best detection & stabilize -------- */
+    /* -------- Choose ONE best detection & stabilize -------- */
     od_pp_outBuffer_t best;
     int have_best = 0;
     if (pp_output.nb_detect > 0) {
@@ -868,6 +878,50 @@ void pp_thread_fct(void *arg)
 
       /* Log result + Top-K */
       printf("[FR] match: %s  cos=%.3f  (dt=%lums)\r\n", final_name, final_s, (unsigned long)dt);
+
+      /* ---- PIN unlock gating ---- */
+      const uint32_t now_ms = HAL_GetTick();
+      const uint32_t PIN_COOLDOWN_MS = 3000;      // 3-second cooldown
+      const int      STABLE_FRAMES_REQUIRED = 3;  // Require 3 consecutive stable frames
+
+      // Track consecutive frames with same name and above threshold
+      if (strcmp(final_name, last_name) == 0 && final_s >= FR_THR_ON) {
+          g_stable_count++;
+          printf("[FR][Stable] %s %d/%d\r\n", final_name, g_stable_count, STABLE_FRAMES_REQUIRED);
+      } else {
+          g_stable_count = 0;
+          strncpy(last_name, final_name, sizeof(last_name));
+      }
+
+      // Trigger only if all conditions are met
+      if (!g_pin_session_active &&
+          strcmp(final_name, "Unknown") != 0 &&
+          final_s >= FR_THR_ON &&
+          g_stable_count >= STABLE_FRAMES_REQUIRED &&
+          (now_ms - g_last_unlock_ms) > PIN_COOLDOWN_MS)
+      {
+          g_pin_session_active = true;
+          g_stable_count = 0;
+          g_last_unlock_ms = now_ms;
+
+          printf("[UI] Launching PIN screen for %s...\r\n", final_name);
+
+          if (!FR_LoadAndDecryptPinForName(FR_SD_BASE_DIR, final_name)) {
+              printf("[UI][ERR] No PIN file for %s, skipping PIN screen.\r\n", final_name);
+          }else {
+        	  printf("[UI] Loaded decrypted PIN for %s → %s\r\n", final_name, g_decrypted_pin);
+              UI_FR_PinScreen_Show();
+              UI_FR_PinScreen_WaitForOK();
+          }
+
+          printf("[UI] PIN screen done, resuming pipeline...\r\n");
+
+          g_pin_session_active = false;
+          g_last_unlock_ms = HAL_GetTick();  // Reset cooldown timer
+      }
+
+
+
 #if DBG_PRINT_TOPK
       if (K > 0) {
         printf("[FR][Top%d] ", K);

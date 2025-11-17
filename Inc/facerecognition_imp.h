@@ -5,6 +5,7 @@ extern "C" {
 
 /* exported FaceRec PP thread entry */
 void pp_thread_fct(void *arg);
+void FR_ResetRecognitionState(void);
 
 #ifdef __cplusplus
 }
