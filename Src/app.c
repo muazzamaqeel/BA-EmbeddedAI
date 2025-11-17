@@ -1321,7 +1321,7 @@ void APP_FaceDetection_Reset(void)
 #endif
     FR_ResetRecognitionState();
     fr_clear_frame_snapshot();
-    APP_SleepMode_Disable();
+    //APP_SleepMode_Disable();
     xTaskNotifyGive(g_nn_task);
     printf("[APP] Detection pipeline resumed without camera restart.\r\n");
 }

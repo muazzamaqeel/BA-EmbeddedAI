@@ -22,11 +22,14 @@
  * GLOBAL SLEEP STATE
  * -------------------------------------------------------- */
 static volatile bool g_sleep_active = false;
-static uint32_t g_last_face_time = 0;
-static uint32_t g_wake_time = 0;
+
+uint32_t g_last_face_time = 0;
+uint32_t g_wake_time      = 0;
+
 static bool touch_detected_since_last_sleep = false;
 static volatile bool g_sleep_disabled_override = false;
 static volatile bool g_sleep_counter_enabled = false;
+
 
 /* RTOS task storage */
 static StaticTask_t sleep_task_tcb;

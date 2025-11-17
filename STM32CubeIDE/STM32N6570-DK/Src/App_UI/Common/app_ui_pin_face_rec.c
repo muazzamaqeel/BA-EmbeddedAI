@@ -158,14 +158,32 @@ void UI_FR_PinScreen_WaitForOK(void)
                         }
                         else if (strcmp(label,"OK")==0) {
                             fr_pin_buffer[fr_pin_len] = '\0';
+
                             if (strcmp(fr_pin_buffer, g_current_pin) == 0) {
                                 FR_UI_ShowStatus("Success", UTIL_LCD_COLOR_GREEN);
                                 printf("[UI-FR] Correct PIN entered!\r\n");
                                 HAL_Delay(50);  // brief success flash
+
                                 APP_SleepMode_Enable();
                                 APP_FaceDetection_Reset();
+
+                                /* -------------------------------
+                                 * FIX: Re-enable SleepMode logic
+                                 * ------------------------------- */
+                                extern bool g_pipeline_running;
+                                extern bool g_fr_active;
+                                extern uint32_t g_last_face_time;
+                                extern uint32_t g_wake_time;
+
+                                g_pipeline_running = false;
+                                g_fr_active        = false;
+
+                                g_last_face_time = HAL_GetTick();
+                                g_wake_time      = g_last_face_time;
+
                                 return;
-                            } else {
+                            }
+                            else {
                                 FR_UI_ShowStatus("Wrong PIN", UTIL_LCD_COLOR_RED);
                                 printf("[UI-FR] Wrong PIN!\r\n");
                                 fr_pin_len = 0;
