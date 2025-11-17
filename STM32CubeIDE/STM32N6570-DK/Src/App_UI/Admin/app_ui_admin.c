@@ -8,6 +8,8 @@
 #include "app_ui_admin.h"
 #include "app_change_pin.h"
 #include "app_change_face.h"
+#include "app_shared.h"
+
 
 #define ADMIN_BG_ADDR   ((uint32_t)0x778A0000)
 
@@ -51,6 +53,7 @@ AdminResult UI_AdminScreen_Show(void)
 
                     if (res == CP_RESULT_BACK_TO_START) {
                         printf("[UI] Returning to Start screen after PIN change\r\n");
+                        APP_SleepMode_ResetState();
                         for (int i = 0; i < 10; i++) {
                             BSP_TS_GetState(0, &ts_state);
                             if (!ts_state.TouchDetected) break;
@@ -67,6 +70,7 @@ AdminResult UI_AdminScreen_Show(void)
                 {
                     printf("[UI] Admin Button2 pressed (Change Face)\r\n");
                     UI_TestPassed_Show();
+                    APP_SleepMode_ResetState();
                     for (int i = 0; i < 10; i++) {
                         BSP_TS_GetState(0, &ts_state);
                         if (!ts_state.TouchDetected) break;

@@ -253,8 +253,21 @@ void UI_TestPassed_Show(void)
     APP_SleepMode_Disable();
     printf("[UI] Entering Face Management screen...\r\n");
 
-    if (!EnsureSDPresent()) return;
-    if (!EnsureSDMounted()) return;
+    /* -----------------------------
+     * SD missing or mount fails
+     * MUST re-enable sleep before exit
+     * -----------------------------
+     */
+    if (!EnsureSDPresent()) {
+        APP_SleepMode_Enable();
+        APP_SleepMode_ResetState();
+        return;
+    }
+    if (!EnsureSDMounted()) {
+        APP_SleepMode_Enable();
+        APP_SleepMode_ResetState();
+        return;
+    }
 
     ReadUserListFromSD();
     DrawFaceTable();
@@ -276,11 +289,13 @@ void UI_TestPassed_Show(void)
 
                 if (ty >= BUTTON_Y && ty <= BUTTON_Y + BUTTON_H)
                 {
+                    /* DELETE */
                     if (tx >= 120 && tx <= 120 + BUTTON_W)
                     {
                         printf("[UI] DELETE SELECTED pressed\r\n");
                         DeleteSelectedUsers();
                     }
+                    /* BACK */
                     else if (tx >= 120 + BUTTON_W + BUTTON_GAP &&
                              tx <= 120 + BUTTON_W + BUTTON_GAP + BUTTON_W)
                     {
@@ -291,13 +306,22 @@ void UI_TestPassed_Show(void)
                         BSP_LCD_SetLayerVisible(0, 1, ENABLE);
                         BSP_LCD_Reload(0, BSP_LCD_RELOAD_IMMEDIATE);
 
+                        /* -----------------------------
+                         * CRITICAL FIX
+                         * Restore sleep + pipeline state
+                         * -----------------------------
+                         */
+                        APP_SleepMode_Enable();
+                        APP_SleepMode_ResetState();
+
                         return;
                     }
-
                 }
             }
             else if (!ts.TouchDetected)
+            {
                 touch_active = false;
+            }
         }
         HAL_Delay(80);
     }

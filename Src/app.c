@@ -1219,6 +1219,16 @@ static void vSleepDelayTask(void *argument)
 void app_start_pipeline(void)
 {
 
+    if (g_pipeline_running) {
+        printf("[APP] Pipeline already running. Ignoring start.\r\n");
+        return;
+    }
+
+    printf("[APP] Starting camera + NN pipeline...\r\n");
+
+    g_pipeline_running = true;
+    g_fr_active = false;
+
 
 	xTaskCreateStatic(
 	    CPULoadLogger_Task,
@@ -1270,25 +1280,26 @@ void app_start_pipeline(void)
                           isp_thread_stack, &isp_thread);
   assert(hdl != NULL);
 
-  printf("[APP] Threads launched successfully.\r\n");
-  printf("[APP] Pipeline fully started.\r\n");
+  printf("[APP] Pipeline threads started.\r\n");
 
+  /* Start wake grace period for sleep mode */
   xTaskCreateStatic(
-      vSleepDelayTask,
-      "SleepDelay",
+      vSleepDelayTask, "SleepDelay",
       sizeof(sleep_delay_stack) / sizeof(StackType_t),
-      NULL,
-      tskIDLE_PRIORITY,
-      sleep_delay_stack,
-      &sleep_delay_tcb
+      NULL, tskIDLE_PRIORITY,
+      sleep_delay_stack, &sleep_delay_tcb
   );
 
-
+  printf("[APP] Pipeline fully active.\r\n");
 }
 
 void app_run(void)
 {
-  app_init_pipeline();
+    printf("[APP] Base initialization only — pipeline not started yet.\r\n");
+    app_init_pipeline();
+    g_pipeline_running = false;
+    g_fr_active = false;
+    printf("[APP] System ready. Waiting for Start button.\r\n");
 }
 
 int CMW_CAMERA_PIPE_FrameEventCallback(uint32_t pipe)
@@ -1327,3 +1338,25 @@ void APP_FaceDetection_Reset(void)
 }
 
 
+void app_stop_pipeline(void)
+{
+    if (!g_pipeline_running) {
+        printf("[APP] Pipeline already stopped.\r\n");
+        return;
+    }
+
+    printf("[APP] Stopping pipeline (camera + NN)...\r\n");
+
+    g_pipeline_running = false;
+    g_fr_active = false;
+
+    /* Stop NN tasks */
+    nn_stop_detector_thread();
+    nn_stop_facerec_thread();
+
+    /* Suspend camera */
+    CMW_CAMERA_Suspend(DCMIPP_PIPE1);
+    CMW_CAMERA_Suspend(DCMIPP_PIPE2);
+
+    printf("[APP] Pipeline stopped.\r\n");
+}

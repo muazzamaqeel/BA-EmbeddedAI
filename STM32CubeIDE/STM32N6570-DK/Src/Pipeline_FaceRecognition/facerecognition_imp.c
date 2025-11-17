@@ -55,9 +55,8 @@
 #include "crypto_utils.h"
 #include "refset_bin.h"
 #include "app_change_pin.h"
+#include "app_shared.h"
 
-bool g_pipeline_running = false;
-bool g_fr_active = false;
 const LL_Buffer_InfoTypeDef *LL_ATON_Input_Buffers_Info_face_recognition(void);
 const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
 

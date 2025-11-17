@@ -8,6 +8,7 @@
 #include "app_ui_start.h"
 #include "app_ui_pin.h"
 #include "app_sleepmode.h"
+#include <string.h>
 
 #ifndef UTIL_LCD_COLOR_TRANSPARENT
 #define UTIL_LCD_COLOR_TRANSPARENT 0x0000u
@@ -49,6 +50,7 @@ static void UI_DrawButton(int x, int y, int w, int h,
 
 void UI_StartScreen_Show(void)
 {
+    APP_SleepMode_ResetState();
     UTIL_LCD_SetLayer(1);
     BSP_LCD_DisplayOn(0);
     BSP_LCD_SetLayerVisible(0, 1, ENABLE);
@@ -70,12 +72,18 @@ UI_ButtonResult UI_WaitForButton(void)
 
     while (1) {
         if (BSP_TS_GetState(0, &ts_state) == BSP_ERROR_NONE && ts_state.TouchDetected) {
+
             uint16_t tx = ts_state.TouchX;
             uint16_t ty = ts_state.TouchY;
+
+            /* -------------------- START -------------------- */
             if (tx >= BTN_START_X && tx <= BTN_START_X + BTN_START_W &&
                 ty >= BTN_START_Y && ty <= BTN_START_Y + BTN_START_H)
             {
                 printf("[UI] Start pressed!\r\n");
+
+                APP_SleepMode_ResetState();  // make sure sleep logic clean
+
                 BSP_LCD_SetLayerVisible(0, 1, DISABLE);
                 UTIL_LCD_Clear(UTIL_LCD_COLOR_TRANSPARENT);
                 UTIL_LCD_SetLayer(1);
@@ -88,11 +96,13 @@ UI_ButtonResult UI_WaitForButton(void)
                 return UI_BTN_START;
             }
 
-            /* -------------------- ADMIN button -------------------- */
+            /* -------------------- ADMIN -------------------- */
             if (tx >= BTN_ADMIN_X && tx <= BTN_ADMIN_X + BTN_ADMIN_W &&
                 ty >= BTN_ADMIN_Y && ty <= BTN_ADMIN_Y + BTN_ADMIN_H)
             {
                 printf("[UI] Admin pressed!\r\n");
+
+                APP_SleepMode_ResetState();  // clean state before admin flow
 
                 BSP_LCD_SetLayerVisible(0, 1, DISABLE);
                 BSP_LCD_Reload(0, BSP_LCD_RELOAD_IMMEDIATE);
@@ -108,7 +118,6 @@ UI_ButtonResult UI_WaitForButton(void)
                 printf("[UI] PIN screen finished, returning to start menu...\r\n");
                 return UI_BTN_ADMIN;
             }
-
         }
         HAL_Delay(50);
     }

@@ -167,19 +167,16 @@ void UI_FR_PinScreen_WaitForOK(void)
                                 APP_SleepMode_Enable();
                                 APP_FaceDetection_Reset();
 
-                                /* -------------------------------
-                                 * FIX: Re-enable SleepMode logic
-                                 * ------------------------------- */
                                 extern bool g_pipeline_running;
                                 extern bool g_fr_active;
                                 extern uint32_t g_last_face_time;
                                 extern uint32_t g_wake_time;
 
-                                g_pipeline_running = false;
-                                g_fr_active        = false;
+                                g_fr_active = false;
 
                                 g_last_face_time = HAL_GetTick();
                                 g_wake_time      = g_last_face_time;
+
 
                                 return;
                             }
