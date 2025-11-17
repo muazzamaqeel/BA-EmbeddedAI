@@ -132,17 +132,17 @@
 			<locationURI>PARENT-2-PROJECT_LOC/Lib/tracker/tracker.c</locationURI>
 		</link>
 		<link>
-			<name>Src/Application/app.c</name>
+			<name>Src/Core/app.c</name>
 			<type>1</type>
 			<locationURI>PARENT-2-PROJECT_LOC/Src/app.c</locationURI>
 		</link>
 		<link>
-			<name>Src/Application/app_cam.c</name>
+			<name>Src/Core/app_cam.c</name>
 			<type>1</type>
 			<locationURI>PARENT-2-PROJECT_LOC/Src/app_cam.c</locationURI>
 		</link>
 		<link>
-			<name>Src/Application/main.c</name>
+			<name>Src/Core/main.c</name>
 			<type>1</type>
 			<locationURI>PARENT-2-PROJECT_LOC/Src/main.c</locationURI>
 		</link>
