@@ -192,7 +192,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="Src/UI/Resources|Src/AI/UserFace|Src/AI/Generated|Src/Pipeline_FaceRecognition/UserFace/Automation|Src/Pipeline_FaceRecognition/Generated/embeddings_table_Keti.c|Lib/ai-postprocessing-wrapper/app_postprocess_od_st_yolox_uf.c|Src/Pipeline_FaceRecognition/UserFace|Src/Pipeline_FaceRecognition/Generated/embeddings_table_Aida.c|Src/Pipeline_FaceRecognition/Generated/embeddings_table_Muazzam.c|Src/App_UI/Resources|Lib/AI_Runtime/Npu/ll_aton/ll_aton_osal_rtos_template.c|Src/Pipeline_FaceRecognition/Generated/combined_refset.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+						<entry excluding="Src/Core/AI/UserFace|Src/Core/AI/Generated|Src/UI/Resources|Src/AI/Generated|Src/Pipeline_FaceRecognition/UserFace/Automation|Src/Pipeline_FaceRecognition/Generated/embeddings_table_Keti.c|Lib/ai-postprocessing-wrapper/app_postprocess_od_st_yolox_uf.c|Src/Pipeline_FaceRecognition/UserFace|Src/Pipeline_FaceRecognition/Generated/embeddings_table_Aida.c|Src/Pipeline_FaceRecognition/Generated/embeddings_table_Muazzam.c|Src/App_UI/Resources|Lib/AI_Runtime/Npu/ll_aton/ll_aton_osal_rtos_template.c|Src/AI/UserFace|Src/Pipeline_FaceRecognition/Generated/combined_refset.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
