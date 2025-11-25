@@ -1,15 +1,3 @@
-#define MY_NAME "Muazzam"
-#define FR_SUBJECT_NAME MY_NAME
-#include "npu_guard.h"
-#include "fr_helpers.h"
-#include "app_shared.h"
-#include "facedetection_imp.h"
-#include "cache_utils.h"
-#include "facedetection_imp_bridge.h"
-#include "facerecognition_imp.h"
-#include <stdbool.h>
-#include <stdint.h>   // ✅ add this
-
 /**
  ******************************************************************************
  * @file    app.c
@@ -27,7 +15,17 @@
  *
  ******************************************************************************
  */
-
+#define MY_NAME "Muazzam"
+#define FR_SUBJECT_NAME MY_NAME
+#include "npu_guard.h"
+#include "fr_helpers.h"
+#include "app_shared.h"
+#include "facedetection_imp.h"
+#include "cache_utils.h"
+#include "facedetection_imp_bridge.h"
+#include "facerecognition_imp.h"
+#include <stdbool.h>
+#include <stdint.h>
 #include "app.h"
 #include "network.h"
 #include "stm32n6570_discovery_xspi.h"
@@ -40,7 +38,6 @@
 #include "isp_api.h"
 #include "ll_aton_runtime.h"
 #include "ll_aton_rt_user_api.h"
-
 #include "cmw_camera.h"
 #include "scrl.h"
 #include "stm32_lcd.h"

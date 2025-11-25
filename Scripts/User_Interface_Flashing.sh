@@ -3,14 +3,18 @@
 # STM32N6570-DK — UI Image Flashing Utility (Bash version, fixed)
 # ================================================================
 
-# --- Always use GNU find (avoid Windows find.exe issues) ---
+# Use GNU find instead of Windows find.exe
 export PATH="/usr/bin:/bin:$PATH"
 
 set -e  # Stop on first error
 
 # --- Base directories ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BASE_DIR="$(realpath "$SCRIPT_DIR/../STM32CubeIDE/STM32N6570-DK/Src/App_UI/Resources")"
+BASE_DIR_UNIX="$(realpath "$SCRIPT_DIR/../STM32CubeIDE/STM32N6570-DK/Src/UI/Resources")"
+
+# Convert BASE_DIR to Windows-native path for ImageMagick
+BASE_DIR="$(cygpath -w "$BASE_DIR_UNIX")"
+
 STM32Prog="STM32_Programmer_CLI"
 
 # --- Load external loader path from config.json ---
@@ -22,7 +26,7 @@ fi
 
 Loader=$(grep -oP '"LoaderPath"\s*:\s*"\K[^"]+' "$CONFIG_PATH" || true)
 if [ -z "$Loader" ]; then
-    echo "Error: Failed to parse config.json — check syntax or file path."
+    echo "Error: Failed to parse LoaderPath from config.json"
     exit 1
 fi
 if [ ! -f "$Loader" ]; then
@@ -40,13 +44,17 @@ declare -A FlashMap=(
     ["pin"]="0x77AE0000"
 )
 
-# --- Function: Convert and Flash ---
+# -------------------------------------------------------------------
+# Function: Convert and Flash
+# -------------------------------------------------------------------
 convert_and_flash() {
     local dirName="$1"
     local flashAddr="$2"
-    local folder="$BASE_DIR/$dirName"
 
-    if [ ! -d "$folder" ]; then
+    local folder_unix="$BASE_DIR_UNIX/$dirName"
+    local folder_win="$BASE_DIR\\$dirName"
+
+    if [ ! -d "$folder_unix" ]; then
         echo "⚠️  Skipping $dirName (folder not found)"
         return
     fi
@@ -54,55 +62,72 @@ convert_and_flash() {
     echo ""
     echo "=== Processing $dirName ==="
 
-    # 1) Existing .bin file
+    # Search for existing .bin first (Unix path)
     local binFile
-    binFile=$(/usr/bin/find "$folder" -maxdepth 1 -type f -iregex ".*\.bin$" | head -n 1)
+    binFile=$(/usr/bin/find "$folder_unix" -maxdepth 1 -type f -iname "*.bin" | head -n 1)
+
     if [ -n "$binFile" ]; then
+        local binFileWin
+        binFileWin=$(cygpath -w "$binFile")
+
         echo "Found existing .bin file: $(basename "$binFile")"
-        echo "Flashing $(basename "$binFile") to $flashAddr..."
-        if $STM32Prog -c port=SWD mode=HOTPLUG -el "$Loader" -w "$binFile" "$flashAddr" -v; then
-            echo "Flashed $dirName at $flashAddr"
-        else
-            echo "Flash failed for $dirName"
-        fi
+        echo "Flashing to $flashAddr..."
+        $STM32Prog -c port=SWD mode=HOTPLUG -el "$Loader" -w "$binFileWin" "$flashAddr" -v
+        echo "Flashed $dirName at $flashAddr"
         return
     fi
 
-    # 2) Otherwise find image (.bmp/.jpg/.png)
+    # Otherwise find image
     local image
-    image=$(/usr/bin/find "$folder" -maxdepth 1 -type f -iregex ".*\.\(bmp\|jpg\|jpeg\|png\)$" | head -n 1)
+    image=$(/usr/bin/find "$folder_unix" -maxdepth 1 -type f -iregex ".*\.\(bmp\|jpg\|jpeg\|png\)$" | head -n 1)
+
     if [ -z "$image" ]; then
-        echo "No .bmp/.jpg/.png/.bin found in $dirName"
+        echo "❌ No .bmp/.jpg/.png/.bin found inside $dirName"
         return
     fi
 
     local baseName
     baseName=$(basename "$image")
     baseName="${baseName%.*}"
-    local resizedBMP="$folder/${baseName}_stm32.bmp"
-    local binFilePath="$folder/${baseName}.bin"
 
-    echo "Converting $(basename "$image") → $(basename "$resizedBMP")..."
-    if ! magick "$image" -resize 800x480! -depth 8 -type truecolor -compress none BMP3:"$resizedBMP"; then
-        echo "ImageMagick conversion failed for $dirName"
+    # Output files (Unix + Windows versions)
+    local resizedBMP_unix="$folder_unix/${baseName}_stm32.bmp"
+    local resizedBMP_win
+    resizedBMP_win=$(cygpath -w "$resizedBMP_unix")
+
+    local binFile_unix="$folder_unix/${baseName}.bin"
+    local binFile_win
+    binFile_win=$(cygpath -w "$binFile_unix")
+
+    echo "Converting $(basename "$image") → ${baseName}_stm32.bmp..."
+
+    # Ensure directory exists
+    mkdir -p "$folder_unix"
+
+    # Convert using Windows paths for ImageMagick
+    local image_win
+    image_win=$(cygpath -w "$image")
+
+    if ! magick "$image_win" -resize 800x480! -depth 8 -type truecolor -compress none BMP3:"$resizedBMP_win"; then
+        echo "❌ ImageMagick conversion failed for $dirName"
         return
     fi
 
-    if [ ! -f "$resizedBMP" ]; then
-        echo "Conversion failed: $resizedBMP not created"
+    if [ ! -f "$resizedBMP_unix" ]; then
+        echo "❌ Conversion failed: $resizedBMP_unix not created"
         return
     fi
 
-    cp -f "$resizedBMP" "$binFilePath"
-    echo "Flashing $(basename "$binFilePath") to $flashAddr..."
-    if $STM32Prog -c port=SWD mode=HOTPLUG -el "$Loader" -w "$binFilePath" "$flashAddr" -v; then
-        echo "Flashed $dirName at $flashAddr"
-    else
-        echo "Flash failed for $dirName"
-    fi
+    cp -f "$resizedBMP_unix" "$binFile_unix"
+
+    echo "Flashing ${baseName}.bin to $flashAddr..."
+    $STM32Prog -c port=SWD mode=HOTPLUG -el "$Loader" -w "$binFile_win" "$flashAddr" -v
+    echo "Flashed $dirName at $flashAddr"
 }
 
-# --- Main execution ---
+# -------------------------------------------------------------------
+# Main Execution
+# -------------------------------------------------------------------
 echo "============================================="
 echo " STM32N6570-DK UI Image Flashing Utility"
 echo "============================================="

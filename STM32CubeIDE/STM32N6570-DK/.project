@@ -132,21 +132,6 @@
 			<locationURI>PARENT-2-PROJECT_LOC/Lib/tracker/tracker.c</locationURI>
 		</link>
 		<link>
-			<name>Src/Application/app.c</name>
-			<type>1</type>
-			<locationURI>PARENT-2-PROJECT_LOC/Src/app.c</locationURI>
-		</link>
-		<link>
-			<name>Src/Application/app_cam.c</name>
-			<type>1</type>
-			<locationURI>PARENT-2-PROJECT_LOC/Src/app_cam.c</locationURI>
-		</link>
-		<link>
-			<name>Src/Application/main.c</name>
-			<type>1</type>
-			<locationURI>PARENT-2-PROJECT_LOC/Src/main.c</locationURI>
-		</link>
-		<link>
 			<name>Lib/Camera_Middleware/sensors/cmw_imx335.c</name>
 			<type>1</type>
 			<locationURI>PARENT-2-PROJECT_LOC/Lib/Camera_Middleware/sensors/cmw_imx335.c</locationURI>
@@ -207,6 +192,11 @@
 			<locationURI>PARENT-2-PROJECT_LOC/Src/freertos_bsp.c</locationURI>
 		</link>
 		<link>
+			<name>Src/Common/utils/app_cam.c</name>
+			<type>1</type>
+			<locationURI>PARENT-2-PROJECT_LOC/Src/app_cam.c</locationURI>
+		</link>
+		<link>
 			<name>Src/Common/utils/app_fuseprogramming.c</name>
 			<type>1</type>
 			<locationURI>PARENT-2-PROJECT_LOC/Src/app_fuseprogramming.c</locationURI>
@@ -220,6 +210,16 @@
 			<name>Src/Common/utils/stm32n6xx_it.c</name>
 			<type>1</type>
 			<locationURI>PARENT-2-PROJECT_LOC/Src/stm32n6xx_it.c</locationURI>
+		</link>
+		<link>
+			<name>Src/Core/main/app.c</name>
+			<type>1</type>
+			<locationURI>PARENT-2-PROJECT_LOC/Src/app.c</locationURI>
+		</link>
+		<link>
+			<name>Src/Core/main/main.c</name>
+			<type>1</type>
+			<locationURI>PARENT-2-PROJECT_LOC/Src/main.c</locationURI>
 		</link>
 		<link>
 			<name>Lib/Camera_Middleware/sensors/imx335/imx335.c</name>
