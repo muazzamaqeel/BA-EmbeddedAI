@@ -43,3 +43,4 @@ STM32CubeIDE/STM32N6570-DK/Src/Pipeline_FaceRecognition/UserFace/Automation/Keti
 STM32CubeIDE/STM32N6570-DK/Src/Pipeline_FaceRecognition/UserFace/Automation/all_faces/Ruth/embeddings_Ruth.txt
 STM32CubeIDE/STM32N6570-DK/Src/Pipeline_FaceRecognition/UserFace/Automation/all_faces/manifest.txt
 STM32CubeIDE/STM32N6570-DK/Src/Pipeline_FaceRecognition/UserFace/Automation/all_faces/Keti/embeddings_Keti.txt
+/STM32CubeIDE/STM32N6570-DK/Src/Core/AI/UserFace/Automation/venv310
