@@ -17,6 +17,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include "app_change_face_model.h"
+
 #ifndef UTIL_LCD_COLOR_TRANSPARENT
 #define UTIL_LCD_COLOR_TRANSPARENT 0x0000u
 #endif
@@ -40,13 +42,11 @@
 #define BUTTON_GAP          100
 #define BUTTON_Y            (SCREEN_H - BUTTON_H - 25)
 
-static FATFS g_fs;
-static char g_usernames[MAX_USERS][MAX_NAME_LEN];
-static bool g_selected[MAX_USERS];
-static int  g_user_count = 0;
-static bool EnsureSDPresent(void);
-static bool EnsureSDMounted(void);
-static void ReadUserListFromSD(void);
+
+FATFS g_fs;
+char g_usernames[MAX_USERS][MAX_NAME_LEN];
+bool g_selected[MAX_USERS];
+int  g_user_count = 0;
 static void DrawFaceTable(void);
 static void DrawButtons(void);
 static void ToggleSelection(uint16_t x, uint16_t y);
@@ -69,58 +69,7 @@ static bool EnsureSDPresent(void)
     return true;
 }
 
-static bool EnsureSDMounted(void)
-{
-    FRESULT res = f_mount(&g_fs, "0:", 1);
-    if (res == FR_OK)
-    {
-        printf("[UI] SD card mounted successfully\r\n");
-        return true;
-    }
-    printf("[UI] SD mount failed (%d)\r\n", res);
-    return false;
-}
 
-static void ReadUserListFromSD(void)
-{
-    g_user_count = 0;
-    memset(g_selected, 0, sizeof(g_selected));
-
-    DIR dir;
-    FILINFO fno;
-    FRESULT res = f_opendir(&dir, FACES_DIR_PATH);
-    if (res != FR_OK)
-    {
-        printf("[UI] Failed to open faces directory (%d)\r\n", res);
-        return;
-    }
-
-    while (1)
-    {
-        res = f_readdir(&dir, &fno);
-        if (res != FR_OK || fno.fname[0] == 0)
-            break;
-
-        if (!(fno.fattrib & AM_DIR))
-        {
-            const char *dot = strrchr(fno.fname, '.');
-            if (dot && strcmp(dot, ".bin") == 0)
-            {
-                /* Skip PIN files */
-                if (strstr(fno.fname, "_pin")) continue;
-                size_t len = (size_t)(dot - fno.fname);
-                if (len >= MAX_NAME_LEN) len = MAX_NAME_LEN - 1;
-                strncpy(g_usernames[g_user_count], fno.fname, len);
-                g_usernames[g_user_count][len] = '\0';
-                g_user_count++;
-                if (g_user_count >= MAX_USERS)
-                    break;
-            }
-
-        }
-    }
-    f_closedir(&dir);
-}
 
 static void DrawButtonRounded(int x, int y, int w, int h, uint32_t color, const char *label)
 {
@@ -239,7 +188,7 @@ static void DeleteSelectedUsers(void)
         }
     }
 
-    ReadUserListFromSD();
+    ReadUserListFromSD_Model();
     DrawFaceTable();
 
     char msg[64];
@@ -263,13 +212,13 @@ void UI_TestPassed_Show(void)
         APP_SleepMode_ResetState();
         return;
     }
-    if (!EnsureSDMounted()) {
+    if (!EnsureSDMounted_Model()) {
         APP_SleepMode_Enable();
         APP_SleepMode_ResetState();
         return;
     }
 
-    ReadUserListFromSD();
+    ReadUserListFromSD_Model();
     DrawFaceTable();
 
     TS_State_t ts;
