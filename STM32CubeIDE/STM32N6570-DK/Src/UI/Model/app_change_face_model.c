@@ -7,11 +7,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <stddef.h>
-
-#include "fatfs.h"      // For FRESULT, DIR, FILINFO, f_opendir, f_readdir, f_closedir
-#include "stm32n6570_discovery_sd.h"  // For SD detection if needed
-
-#include "app_change_face_model.h"   // Your new header (shown below)
+#include "app_change_face_controller.h"
+#include "fatfs.h"
+#include "stm32n6570_discovery_sd.h"
+#include "app_change_face_model.h"
 extern FATFS g_fs;
 extern char g_usernames[MAX_USERS][MAX_NAME_LEN];
 extern bool g_selected[MAX_USERS];
@@ -76,4 +75,10 @@ void ReadUserListFromSD_Model(void)
         }
     }
     f_closedir(&dir);
+}
+
+
+void UI_TestPassed_Show(void)
+{
+    UI_TestPassed_Show_Controller();
 }
