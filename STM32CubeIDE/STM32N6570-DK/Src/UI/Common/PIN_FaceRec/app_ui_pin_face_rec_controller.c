@@ -26,9 +26,9 @@
 #define FR_KEY_SP  22
 #define FR_KEYPAD_ORIGIN_X  ((800/2 - (3*FR_KEY_W + 2*FR_KEY_SP)/2))
 #define FR_KEYPAD_ORIGIN_Y  145
+#define FR_PIN_BG_COLOR  UTIL_LCD_COLOR_DARKGRAY
 char fr_pin_buffer[8];
 int  fr_pin_len = 0;
-#define FR_PIN_BG_COLOR  UTIL_LCD_COLOR_DARKGRAY
 
 
 void UI_FR_PinScreen_WaitForOK_Controller(void)
