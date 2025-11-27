@@ -54,6 +54,7 @@
 #include "ui_fsm.h"
 #include "fatfs.h"
 #include "stm32n6570_discovery_sd.h"
+#include "Board_UID.h"
 
 UART_HandleTypeDef huart1;
 
@@ -149,9 +150,9 @@ if (XSPI_NOR_Map_Once() != 0) {
   printf("[MAIN] Starting Refset Loader Task...\r\n");
   FR_StartRefsetLoader();
   printf("[MAIN] Initializing base application...\r\n");
+  FR_PrintUID();
   app_run();
   APP_SleepMode_Init();
-
   printf("[MAIN] Running UI FSM (blocking until pipeline starts)...\r\n");
   UI_FSM_Init();
   UI_FSM_Run();
