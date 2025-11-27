@@ -1,5 +1,7 @@
 Aida/Aida.bin
 Aida/aida_pin.bin
+Keti/Keti.bin
+Keti/keti_pin.bin
 Muazzam/Muazzam.bin
 Muazzam/muazzam_pin.bin
 Nik/Nik.bin
