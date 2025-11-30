@@ -10,19 +10,9 @@
  
  #include <stdbool.h>
  
- /**
-  * @brief Show the FaceRec PIN entry screen (with visible keypad)
-  *        - Disables sleep while active
-  *        - Draws background, keypad, and masked PIN buffer
-  */
- void UI_FR_PinScreen_Show(void);
+void UI_FR_PinScreen_Show(void);
+void UI_FR_PinScreen_WaitForOK(void);
+void FR_UI_ShowStatus(const char *msg, uint32_t color);
+void FR_UI_DrawPinBuffer(int pin_len);
  
- /**
-  * @brief Wait until user presses "OK" and validates PIN
-  *        - Blocks until correct PIN is entered
-  *        - Re-enables sleep on success
-  */
- void UI_FR_PinScreen_WaitForOK(void);
- 
- #endif /* APP_UI_PIN_FACE_REC_H */
- 
+#endif /* APP_UI_PIN_FACE_REC_H */

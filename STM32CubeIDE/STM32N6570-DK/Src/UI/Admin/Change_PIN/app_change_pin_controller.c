@@ -1,75 +1,31 @@
-/**
- *******************************************************************************
- * @file    app_change_pin.c
- * @brief   Change PIN screen (hidden keypad, logs only, no on-screen text)
- *******************************************************************************
- */
-
 #include "stm32_lcd.h"
 #include "stm32_lcd_ex.h"
 #include "stm32n6570_discovery.h"
 #include "stm32n6570_discovery_ts.h"
 #include "stm32n6570_discovery_lcd.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+
 #include "app_change_pin.h"
 #include "app_sleepmode.h"
 #include "admin_pin.h"
 
-char g_current_pin[8] = "1234";
-char g_admin_pin[8] = "1234";
-char g_decrypted_pin[8] = {0};
+extern void CP_UI_DrawBackground(void);
+extern void CP_UI_LogPinBuffer(void);
 
-#define CP_KEY_W   90
-#define CP_KEY_H   65
-#define CP_KEY_SP  20
-#define CP_KEYPAD_ORIGIN_X  ((800/2 - (3*CP_KEY_W + 2*CP_KEY_SP)/2))
-#define CP_KEYPAD_ORIGIN_Y  100
+extern char g_current_pin[8];
+extern char g_admin_pin[8];
+extern char g_decrypted_pin[8];
 
-#define PIN_BOX_X   180
-#define PIN_BOX_Y    20
-#define PIN_BOX_W   440
-#define PIN_BOX_H    50
-
-static char cp_pin_buffer[8];
-static int  cp_pin_len = 0;
-static char new_pin[8];
-static CP_State cp_state;
-
-static void CP_UI_DrawBackground(void)
-{
-    UTIL_LCD_DrawBitmap(0, 0, (uint8_t*)0x77AE0000);
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(PIN_BOX_X, PIN_BOX_Y, PIN_BOX_W, PIN_BOX_H, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_DrawRect(PIN_BOX_X, PIN_BOX_Y, PIN_BOX_W, PIN_BOX_H, UTIL_LCD_COLOR_BLACK);
-
-    printf("[UI-CP] Change PIN screen background drawn\r\n");
-}
+extern char cp_pin_buffer[8];
+extern int  cp_pin_len;
+extern char new_pin[8];
+extern CP_State cp_state;
 
 
-static void CP_UI_LogPinBuffer(void)
-{
-    char disp[16];
-    memset(disp, '*', cp_pin_len);
-    disp[cp_pin_len] = '\0';
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(PIN_BOX_X + 2, PIN_BOX_Y + 2, PIN_BOX_W - 4, PIN_BOX_H - 4, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_SetFont(&Font24);
-    int textWidth  = strlen(disp) * 14;
-    int textHeight = 24;
-    int textX = PIN_BOX_X + (PIN_BOX_W - textWidth) / 2;
-    int textY = PIN_BOX_Y + (PIN_BOX_H - textHeight) / 2;
-
-    UTIL_LCD_DisplayStringAt(textX, textY, (uint8_t*)disp, LEFT_MODE);
-
-    printf("[UI-CP] PIN buffer updated: '%s'\r\n", disp);
-}
-
-CP_Result UI_ChangePinScreen_Show(void)
+CP_Result UI_ChangePinScreen_Show_Controller(void)
 {
     APP_SleepMode_Disable();
 

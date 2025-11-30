@@ -1,6 +1,6 @@
 /**
  ******************************************************************************
- * @file    app_ui_pin.c
+ * @file    app_ui_pin_controller.c
  * @brief   PIN entry / Auth screen with hidden keypad & masked stars in box
  ******************************************************************************
  */
@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include "app_ui_pin_controller.h"
 #include "app_sleepmode.h"
 
 #define KEY_W   90
@@ -25,56 +26,11 @@
 #define PIN_BOX_X   ((800 - PIN_BOX_W) / 2)
 #define PIN_BOX_Y    20
 #define EXPECTED_PIN  g_admin_pin
-static char pin_buffer[8];
-static int  pin_len = 0;
-
-static void UI_DrawBackground(void)
-{
-    UTIL_LCD_DrawBitmap(0, 0, (uint8_t*)0x77AE0000);
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(PIN_BOX_X, PIN_BOX_Y, PIN_BOX_W, PIN_BOX_H, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_DrawRect(PIN_BOX_X, PIN_BOX_Y, PIN_BOX_W, PIN_BOX_H, UTIL_LCD_COLOR_BLACK);
-
-    printf("[UI] PIN background drawn (image @0x77AE0000)\r\n");
-}
-
-static void UI_DrawPinBuffer(void)
-{
-    char disp[16];
-    memset(disp, '*', pin_len);
-    disp[pin_len] = '\0';
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(PIN_BOX_X + 2, PIN_BOX_Y + 2, PIN_BOX_W - 4, PIN_BOX_H - 4, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_SetFont(&Font24);
-    int textWidth  = strlen(disp) * 16;
-    int textHeight = 24;
-    int textX = PIN_BOX_X + (PIN_BOX_W - textWidth) / 2;
-    int textY = PIN_BOX_Y + (PIN_BOX_H - textHeight) / 2 + 2;
-
-    UTIL_LCD_DisplayStringAt(textX, textY, (uint8_t*)disp, LEFT_MODE);
-    printf("[UI] PIN buffer updated: '%s'\r\n", disp);
-}
-
-void UI_PinScreen_Show(void)
-{
-    APP_SleepMode_Disable();
-    pin_len = 0;
-    memset(pin_buffer, 0, sizeof(pin_buffer));
-
-    UTIL_LCD_SetLayer(0);
-    BSP_LCD_DisplayOn(0);
-
-    UI_DrawBackground();
-    UI_DrawPinBuffer();
-
-    printf("[UI] PIN screen shown (hidden keypad, masked stars in box)\r\n");
-}
+char pin_buffer[8];
+int  pin_len = 0;
 
 
-void UI_PinScreen_WaitForOK(void)
+void UI_PinScreen_WaitForOK_Controller(void)
 {
     TS_State_t ts_state;
     bool touch_down = false;   // strict debounce

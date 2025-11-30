@@ -6,11 +6,45 @@ import warnings
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 
-# ==============================
-# AES configuration (must match STM32)
-# ==============================
-AES_KEY = bytes.fromhex("603DEB1015CA71BE2B73AEF0857D7781")  # 128-bit key
-AES_IV  = bytes.fromhex("000102030405060708090A0B0C0D0E0F")   # 16-byte IV
+# =========================================================
+# LOAD THE REAL AES KEY + IV (decrypted using UID)
+# =========================================================
+import hashlib
+from Crypto.Cipher import AES
+
+UID_HEX = "003031564236500300320026"   # your board UID
+UID_BYTES = bytes.fromhex(UID_HEX)
+
+# Derive MASTER KEY + IV = SHA256(UID)
+sha = hashlib.sha256(UID_BYTES).digest()
+MASTER_KEY = sha[:16]
+MASTER_IV  = sha[16:32]
+
+# =========================================================
+# LOAD ENCRYPTED AES BLOCKS FROM AES_Keys/
+# =========================================================
+AES_DIR = os.path.join(os.path.dirname(__file__), "AES_Keys")
+
+AES_KEY_PATH = os.path.join(AES_DIR, "aes_key.enc")
+AES_IV_PATH  = os.path.join(AES_DIR, "aes_iv.enc")
+
+with open(AES_KEY_PATH, "rb") as f:
+    ENC_KEY = f.read()
+
+with open(AES_IV_PATH, "rb") as f:
+    ENC_IV = f.read()
+
+
+def decrypt_block16(enc):
+    cipher = AES.new(MASTER_KEY, AES.MODE_CBC, MASTER_IV)
+    return cipher.decrypt(enc)
+
+# REAL KEYS = what STM32 will use!
+AES_KEY = decrypt_block16(ENC_KEY)
+AES_IV  = decrypt_block16(ENC_IV)
+
+print("[KEY] AES_KEY =", AES_KEY.hex().upper())
+print("[KEY] AES_IV  =", AES_IV.hex().upper())
 
 
 # ==============================
@@ -116,6 +150,14 @@ def l2_normalize(v, eps=1e-9):
     print(f"[NORM] L2 norm before normalize: {n:.6f}")
     return v / (n + eps)
 
+# ------------------------------------------
+# Correct AES for embeddings (NO padding)
+# ------------------------------------------
+def encrypt_emb(raw2048: bytes) -> bytes:
+    if len(raw2048) != 2048:
+        raise ValueError(f"Embedding must be exactly 2048 bytes, got {len(raw2048)}")
+    cipher = AES.new(AES_KEY, AES.MODE_CBC, AES_IV)
+    return cipher.encrypt(raw2048)
 
 # ==============================
 # BIN file emitter (embeddings)
@@ -137,7 +179,7 @@ def emit_bin(out_bin, subject, vecs, encrypt_fn):
         for i, v in enumerate(vecs):
             raw = np.asarray(v, dtype=np.float32).tobytes()
             print(f"[CGEN] Encrypting embedding {i}: raw len={len(raw)}")
-            enc = encrypt_fn(raw)
+            enc = encrypt_emb(raw)
             f.write(struct.pack("<I", len(enc)))
             f.write(enc)
             print(f"[CGEN] -> wrote enc_len={len(enc)}")
@@ -228,8 +270,11 @@ def main():
             interp.invoke()
             y_raw = interp.get_tensor(out_idx).reshape(-1)
             y = dequantize_output(y_raw, out_dtype, out_scale, out_zp)
-            if not args.no_l2norm:
-                y = l2_normalize(y)
+            y = l2_normalize(y.astype(np.float32))
+
+            print("[DBG] First 10 values:", y[:10])
+            print("[DBG] L2 before write:", np.linalg.norm(y))
+
             vecs.append(y.tolist())
             label = pathlib.Path(fp).stem
             labels.append(label)
@@ -238,7 +283,7 @@ def main():
             print(f"[PROC] OK {label}: dim={y.shape[0]} L2={np.linalg.norm(y):.3f}")
 
     # --- Emit BIN per person ---
-    emit_bin(out_bin, args.subject, vecs, encrypt_bytes)
+    emit_bin(out_bin, args.subject, vecs, encrypt_emb)
     print(f"[DONE] Wrote:\n - {out_bin}\n - {out_txt}")
 
     # --- Emit PIN BIN if available ---

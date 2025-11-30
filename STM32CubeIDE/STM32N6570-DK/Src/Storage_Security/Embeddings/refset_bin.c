@@ -13,22 +13,24 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
+#include "Board_UID.h"
+#include "sha256_small.h"
+
 static StaticTask_t g_refset_tcb;
 static StackType_t  g_refset_stack[512];
 static TaskHandle_t g_refset_task = NULL;
 volatile bool g_refset_ready = false;
+static void FR_LoadRealKeys_From_SD(void);
+
 EncList g_enc = {0};
 EmbRec* g_ref_set = NULL;
 int g_ref_set_count = 0;
 
-static const uint8_t FR_AES_KEY_16[16] = {
-    0x60,0x3D,0xEB,0x10,0x15,0xCA,0x71,0xBE,
-    0x2B,0x73,0xAE,0xF0,0x85,0x7D,0x77,0x81
-};
-static const uint8_t FR_AES_IV_16[16]  = {
-    0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,
-    0x08,0x09,0x0A,0x0B,0x0C,0x0D,0x0E,0x0F
-};
+// 🔥 These will be FILLED dynamically (no more hardcoded AES keys)
+static uint8_t FR_AES_KEY_16[16];
+static uint8_t FR_AES_IV_16[16];
+
+
 static void* xmalloc(size_t n)
 {
     void* p = malloc(n);
@@ -36,23 +38,39 @@ static void* xmalloc(size_t n)
     return p;
 }
 
-/* AES CBC decrypt with PKCS7 padding check */
-static int aes_cbc_pkcs7_decrypt_inplace(uint8_t* buf, size_t* len)
+int aes_cbc_pkcs7_decrypt_inplace(uint8_t* buf, size_t* len)
 {
     struct AES_ctx ctx;
-    uint8_t iv[16];
-    memcpy(iv, FR_AES_IV_16, 16);
-    AES_init_ctx_iv(&ctx, FR_AES_KEY_16, iv);
-    AES_CBC_decrypt_buffer(&ctx, buf, *len);
 
-    uint8_t pad = buf[*len - 1];
-    if (pad > 0 && pad <= 16 && pad <= *len)
-        *len -= pad;
-    else {
-        printf("[AES][WARN] Bad padding byte=%u (len=%lu)\r\n", pad, (unsigned long)*len);
+    uint8_t prev_iv[16];
+    memcpy(prev_iv, FR_AES_IV_16, 16);
+
+    uint8_t block[16];
+    size_t n = *len;
+
+    for (size_t off = 0; off < n; off += 16)
+    {
+        memcpy(block, buf + off, 16);      // save ciphertext block
+        AES_init_ctx(&ctx, FR_AES_KEY_16);
+        AES_ECB_decrypt(&ctx, buf + off); // decrypt block
+        for (int i = 0; i < 16; i++) {
+            buf[off + i] ^= prev_iv[i];   // XOR with previous ciphertext block (IV)
+        }
+        memcpy(prev_iv, block, 16);       // shift IV = current ciphertext block
     }
+
+    uint8_t pad = buf[n - 1];
+    if (pad == 0 || pad > 16) {
+        printf("[AES][WARN] Bad padding %u\n", pad);
+    } else {
+        *len -= pad;
+    }
+
     return 0;
 }
+
+
+
 
 /* Load single .bin (skip *_pin.bin) */
 static bool load_one_bin(const char* path)
@@ -123,7 +141,7 @@ void FR_DecryptAllRefsetOnce(void)
         g_ref_set[i].dim  = e->dim;
         g_ref_set[i].data = dec_buf;
     }
-    printf("[DEC] All embeddings decrypted (TinyAES backend)\r\n");
+    printf("[DEC] All embeddings decrypted (Correct CBC)\r\n");
 }
 
 void FR_Refset_FreeAll(void)
@@ -170,12 +188,18 @@ bool FR_LoadAndDecryptPinForName(const char *base_dir, const char *name)
 static void RefsetLoader_Task(void *arg)
 {
     (void)arg;
-    printf("[REFSET] Task start: mount + load + decrypt...\r\n");
+    printf("[REFSET] Task start...\r\n");
+
+    // Print UID before decrypting keys or embeddings
+    FR_PrintUID();
 
     if (!USB_SD_EnsureMounted()) {
-        printf("[REFSET][ERR] SD not mounted, aborting load.\r\n");
+        printf("[REFSET][ERR] SD not mounted.\r\n");
         vTaskDelete(NULL);
     }
+
+    // MUST be added here:
+    FR_LoadRealKeys_From_SD();
 
     FR_LoadRefsetFromSD_Bin("0:/binaries");
     FR_DecryptAllRefsetOnce();
@@ -185,6 +209,7 @@ static void RefsetLoader_Task(void *arg)
 
     vTaskDelete(NULL);
 }
+
 
 void FR_WaitRefsetReady(void)
 {
@@ -208,3 +233,82 @@ void FR_StartRefsetLoader(void)
         configASSERT(g_refset_task != NULL);
     }
 }
+
+
+static void FR_LoadRealKeys_From_SD(void)
+{
+    FIL f; UINT br;
+
+    uint8_t enc_key[16];
+    uint8_t enc_iv[16];
+
+    // -------------------------------
+    // 1) Read UID and convert LE → BE
+    // -------------------------------
+    uint8_t uid_le[12];
+    uint8_t uid_be[12];
+    uint8_t hash[32];
+
+    FR_ReadUID(uid_le);  // raw little-endian bytes (what you print as "Raw")
+
+    // reverse to big-endian (what you used in Python)
+    for (int i = 0; i < 12; ++i) {
+        uid_be[i] = uid_le[11 - i];
+    }
+
+    // Derive MASTER KEY+IV from big-endian UID (matches Python)
+    sha256(uid_be, 12, hash);
+
+    uint8_t master_key[16];
+    uint8_t master_iv[16];
+    memcpy(master_key, hash,     16);
+    memcpy(master_iv,  hash + 16, 16);
+
+    // (optional) debug: compare with Python
+    printf("[MASTER] KEY = ");
+    for (int i = 0; i < 16; ++i) printf("%02X", master_key[i]);
+    printf("\r\n");
+    printf("[MASTER] IV  = ");
+    for (int i = 0; i < 16; ++i) printf("%02X", master_iv[i]);
+    printf("\r\n");
+
+    struct AES_ctx ctx;
+    uint8_t ivtmp[16];
+
+    // -------------------------------
+    // 2) Load encrypted AES_KEY
+    // -------------------------------
+    if (f_open(&f, "0:/binaries/aes_key.enc", FA_READ) == FR_OK) {
+        f_read(&f, enc_key, 16, &br);
+        f_close(&f);
+
+        memcpy(ivtmp, master_iv, 16);
+        AES_init_ctx_iv(&ctx, master_key, ivtmp);
+        AES_CBC_decrypt_buffer(&ctx, enc_key, 16);
+
+        memcpy(FR_AES_KEY_16, enc_key, 16);
+    }
+
+    // -------------------------------
+    // 3) Load encrypted AES_IV
+    // -------------------------------
+    if (f_open(&f, "0:/binaries/aes_iv.enc", FA_READ) == FR_OK) {
+        f_read(&f, enc_iv, 16, &br);
+        f_close(&f);
+
+        memcpy(ivtmp, master_iv, 16);
+        AES_init_ctx_iv(&ctx, master_key, ivtmp);
+        AES_CBC_decrypt_buffer(&ctx, enc_iv, 16);
+
+        memcpy(FR_AES_IV_16, enc_iv, 16);
+    }
+
+    printf("[KEY] Real AES_KEY = ");
+    for (int i = 0; i < 16; i++) printf("%02X", FR_AES_KEY_16[i]);
+    printf("\r\n");
+
+    printf("[KEY] Real AES_IV  = ");
+    for (int i = 0; i < 16; i++) printf("%02X", FR_AES_IV_16[i]);
+    printf("\r\n");
+}
+
