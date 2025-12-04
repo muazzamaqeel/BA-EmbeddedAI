@@ -165,7 +165,7 @@
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.directories.1331800573" name="Library search path (-L)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.directories" valueType="libPaths">
 									<listOptionValue builtIn="false" value="../../../Lib/AI_Runtime/Lib/GCC/ARMCortexM55"/>
-									<listOptionValue builtIn="false" value="C:/STM32_FaceRecognition/BA-EmbeddedAI/STM32CubeIDE/STM32N6570-DK/Lib/STCryptoLib/Lib"/>
+									<listOptionValue builtIn="false" value="/home/c24-02-student/Github/BA-EmbeddedAI/STM32CubeIDE/STM32N6570-DK/Lib/STCryptoLib/Lib"/>
 									<listOptionValue builtIn="false" value="../../../Lib/Camera_Middleware/ISP_Library/evision/Lib"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.otherflags.9191462" name="Other flags" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.otherflags" valueType="stringList">
