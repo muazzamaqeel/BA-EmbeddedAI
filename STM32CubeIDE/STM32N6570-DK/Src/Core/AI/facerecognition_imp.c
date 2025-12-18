@@ -659,9 +659,11 @@ void pp_thread_fct(void *arg)
         }
       }
     }
-
     /* ---------- FaceRec match (throttled) ---------- */
     if (primary.have && fr_in && fr_out && (now - last_fr_ms >= FR_PERIOD)) {
+
+      g_fr_flow_active    = 1;
+      g_fr_flow_start_cyc = PROF_CycleNow();
       last_fr_ms = now;
 
       /* Always take a fresh, race-free detector snapshot **inside** the loop */
@@ -752,6 +754,23 @@ void pp_thread_fct(void *arg)
 
       uint32_t t1 = HAL_GetTick();
       uint32_t c_fr_inf1 = PROF_CycleNow();
+
+      /* END overall FR pipeline timing */
+      if (g_fr_flow_active) {
+          g_fr_flow_end_cyc = c_fr_inf1;
+
+          uint32_t total_cyc =
+              PROF_CycleDiff(g_fr_flow_start_cyc, g_fr_flow_end_cyc);
+
+          printf(
+            "[FR_FLOW] total=%lu cyc (%.3f s)\r\n",
+            (unsigned long)total_cyc,
+            (double)total_cyc / (double)SystemCoreClock
+          );
+
+          g_fr_flow_active = 0;
+      }
+
 
       NPU_Unlock(TAG_FR);
 

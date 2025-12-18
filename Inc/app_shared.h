@@ -163,3 +163,7 @@ typedef struct
 } det_profile_t;
 
 extern volatile det_profile_t g_det_prof;
+
+extern volatile uint32_t g_fr_flow_start_cyc;
+extern volatile uint32_t g_fr_flow_end_cyc;
+extern volatile uint8_t  g_fr_flow_active;

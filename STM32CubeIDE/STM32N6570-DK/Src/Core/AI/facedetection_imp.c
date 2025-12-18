@@ -73,6 +73,12 @@ void nn_thread_fct(void *arg)
 
     uint32_t c_pre0 = PROF_CycleNow();
 
+    /* START overall FR pipeline timing
+     * Only arm it once, when FR is not already active */
+    if (!g_fr_flow_active) {
+        g_fr_flow_start_cyc = c_pre0;
+    }
+
     {
       const uint8_t *src = capture_buffer;
 
