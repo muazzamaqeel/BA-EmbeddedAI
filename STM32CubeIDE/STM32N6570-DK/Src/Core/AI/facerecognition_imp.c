@@ -56,6 +56,7 @@
 #include "refset_bin.h"
 #include "app_change_pin.h"
 #include "app_shared.h"
+#include "profiler.h"
 
 const LL_Buffer_InfoTypeDef *LL_ATON_Input_Buffers_Info_face_recognition(void);
 const LL_Buffer_InfoTypeDef *LL_ATON_Output_Buffers_Info_face_recognition(void);
@@ -677,16 +678,24 @@ void pp_thread_fct(void *arg)
       }
 
       CropDbg cdbg;
-      /* Prepare FR input: detector float [0..1] -> FR quant (I8 or U8) with margin */
+
+      /* ---------- FR PREPROCESS PROFILING ---------- */
+      uint32_t c_fr_pre0 = PROF_CycleNow();
+
+      /* Prepare FR input: detector float [0..1] -> FR quant */
       crop_to_facerec_input_quant_from_detector_f32(
-        det_in, NN_WIDTH, NN_HEIGHT,
-        &primary.roi,
-        FR_CROP_MARGIN,
-        fr_in, FR_IN_W, FR_IN_H,
-        &cdbg);
+          det_in, NN_WIDTH, NN_HEIGHT,
+          &primary.roi,
+          FR_CROP_MARGIN,
+          fr_in, FR_IN_W, FR_IN_H,
+          &cdbg);
 
       /* Cache: CPU -> NPU */
       DCACHE_Clean(fr_in, need_in_bytes);
+
+      uint32_t c_fr_pre1 = PROF_CycleNow();
+      g_det_prof.fr_pre_cycles = PROF_CycleDiff(c_fr_pre0, c_fr_pre1);
+
 
       /* Optional periodic debug on crop + input stats */
       if ((now - last_dbg_ms) >= DBG_EVERY_MS) {
@@ -734,10 +743,23 @@ void pp_thread_fct(void *arg)
 
       /* Run FaceRec (serialized on NPU) */
       NPU_Lock(TAG_FR);
+
+      /* ---------- FR INFERENCE PROFILING ---------- */
+      uint32_t c_fr_inf0 = PROF_CycleNow();
       uint32_t t0 = HAL_GetTick();
+
       FaceRec_Run_NoLock();
-      uint32_t dt = HAL_GetTick() - t0;
+
+      uint32_t t1 = HAL_GetTick();
+      uint32_t c_fr_inf1 = PROF_CycleNow();
+
       NPU_Unlock(TAG_FR);
+
+      uint32_t dt = t1 - t0;
+
+      g_det_prof.fr_infer_cycles = PROF_CycleDiff(c_fr_inf0, c_fr_inf1);
+      g_det_prof.fr_total_cycles = g_det_prof.fr_pre_cycles + g_det_prof.fr_infer_cycles;
+
 
       /* Cache: NPU -> CPU */
       DCACHE_Invalidate(fr_out, fr_out_len);
@@ -877,7 +899,11 @@ void pp_thread_fct(void *arg)
       }
 
       /* Log result + Top-K */
-      printf("[FR] match: %s  cos=%.3f  (dt=%lums)\r\n", final_name, final_s, (unsigned long)dt);
+      printf("[FR] pre=%lu cyc  infer=%lu cyc  total=%lu cyc  (%.2f ms)\r\n",
+             g_det_prof.fr_pre_cycles,
+             g_det_prof.fr_infer_cycles,
+             g_det_prof.fr_total_cycles,
+             PROF_CyclesToMs(g_det_prof.fr_total_cycles));
 
       /* ---- PIN unlock gating ---- */
       const uint32_t now_ms = HAL_GetTick();

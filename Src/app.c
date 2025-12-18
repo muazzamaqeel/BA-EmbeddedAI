@@ -60,8 +60,6 @@
 #include "app_sleepmode.h"
 #include "profiler.h"
 
-volatile det_profile_t g_det_prof = {0};
-
 static StaticTask_t cpu_task_tcb;
 static StackType_t  cpu_task_stack[512];
 cpuload_info_t cpu_load;
