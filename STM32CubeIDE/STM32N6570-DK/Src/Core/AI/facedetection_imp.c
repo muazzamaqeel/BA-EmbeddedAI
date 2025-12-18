@@ -13,6 +13,7 @@
 #include "cmw_camera.h"
 #include "facedetection_imp_bridge.h"
 #include "cache_utils.h"
+#include "profiler.h"
 
 #ifndef CMW_MODE_CONTINUOUS
 #define CMW_MODE_CONTINUOUS DCMIPP_MODE_CONTINUOUS
@@ -69,6 +70,15 @@ void nn_thread_fct(void *arg)
     nn_period[0] = nn_period[1];
     nn_period[1] = HAL_GetTick();
     uint32_t nn_period_ms = nn_period[1] - nn_period[0];
+
+    uint32_t c_pre0 = PROF_CycleNow();
+
+    /* START overall FR pipeline timing
+     * Only arm it once, when FR is not already active */
+    if (!g_fr_flow_active) {
+        g_fr_flow_start_cyc = c_pre0;
+    }
+
     {
       const uint8_t *src = capture_buffer;
 
@@ -135,6 +145,9 @@ void nn_thread_fct(void *arg)
     #endif
     }
 
+    uint32_t c_pre1 = PROF_CycleNow();
+    g_det_prof.det_pre_cycles = PROF_CycleDiff(c_pre0, c_pre1);
+
     /* -------- prepare outputs for NPU write -------- */
     {
       const LL_Buffer_InfoTypeDef *nn_out_info = Detector_Out_Info();
@@ -149,12 +162,36 @@ void nn_thread_fct(void *arg)
     #endif
       }
     }
-
+    /* ---------- INFERENCE TIMING ---------- */
     uint32_t ts = HAL_GetTick();
-    Detector_Run();
-    uint32_t inf_ms = HAL_GetTick() - ts;
-    printf("[TIM] NN  infer took %lums\r\n", (unsigned long)inf_ms);
 
+    uint32_t c_inf0 = PROF_CycleNow();
+    Detector_Run();
+    uint32_t c_inf1 = PROF_CycleNow();
+
+    uint32_t det_cycles = PROF_CycleDiff(c_inf0, c_inf1);
+    uint32_t inf_ms = HAL_GetTick() - ts;
+
+    /* ---------- UPDATE STATS ---------- */
+    g_det_prof.det_infer_cycles = det_cycles;
+    g_det_prof.det_total_cycles =
+            g_det_prof.det_pre_cycles + g_det_prof.det_infer_cycles;
+
+    /* running average (inference only) */
+    g_det_prof.det_count++;
+    g_det_prof.det_infer_cycles_avg +=
+        (det_cycles - g_det_prof.det_infer_cycles_avg) / g_det_prof.det_count;
+
+    /* ---------- LOG ---------- */
+    printf("[DET] pre=%lu cyc  infer=%lu cyc  total=%lu cyc  (%.2f ms)\r\n",
+           g_det_prof.det_pre_cycles,
+           g_det_prof.det_infer_cycles,
+           g_det_prof.det_total_cycles,
+           PROF_CyclesToMs(g_det_prof.det_total_cycles));
+
+    printf("[TIM] NN infer took %lums\r\n", (unsigned long)inf_ms);
+
+    /* ---------- PIPELINE CONTINUE ---------- */
     bqueue_put_free(&nn_input_queue);
     bqueue_put_ready(&nn_output_queue);
 

@@ -29,6 +29,9 @@
 #define FR_PIN_BG_COLOR  UTIL_LCD_COLOR_DARKGRAY
 char fr_pin_buffer[8];
 int  fr_pin_len = 0;
+int  fr_wrong_pin_count = 0;
+
+void APP_FaceDetection_Reset(void);
 
 
 void UI_FR_PinScreen_WaitForOK_Controller(void)
@@ -74,26 +77,33 @@ void UI_FR_PinScreen_WaitForOK_Controller(void)
                                 APP_SleepMode_Enable();
                                 APP_FaceDetection_Reset();
 
-                                extern bool g_pipeline_running;
-                                extern bool g_fr_active;
-                                extern uint32_t g_last_face_time;
-                                extern uint32_t g_wake_time;
-
-                                g_fr_active = false;
-
-                                g_last_face_time = HAL_GetTick();
-                                g_wake_time      = g_last_face_time;
-
-
                                 return;
                             }
                             else {
+                                fr_wrong_pin_count++;
+
                                 FR_UI_ShowStatus("Wrong PIN", UTIL_LCD_COLOR_RED);
-                                printf("[UI-FR] Wrong PIN!\r\n");
+                                printf("[UI-FR] Wrong PIN! (%d/%d)\r\n",
+                                       fr_wrong_pin_count, FR_MAX_WRONG_PINS);
+
                                 fr_pin_len = 0;
-                                memset(fr_pin_buffer,0,sizeof(fr_pin_buffer));
+                                memset(fr_pin_buffer, 0, sizeof(fr_pin_buffer));
                                 FR_UI_DrawPinBuffer(fr_pin_len);
+
+                                if (fr_wrong_pin_count >= FR_MAX_WRONG_PINS) {
+                                    printf("[UI-FR] Too many wrong PIN attempts → returning to FaceRec\r\n");
+
+                                    fr_wrong_pin_count = 0;
+                                    fr_pin_len = 0;
+                                    memset(fr_pin_buffer, 0, sizeof(fr_pin_buffer));
+
+                                    APP_SleepMode_Enable();
+                                    APP_FaceDetection_Reset();
+                                    return;
+                                }
+
                             }
+
                         }
                         else {
                             if (fr_pin_len < (int)(sizeof(fr_pin_buffer)-1)) {
