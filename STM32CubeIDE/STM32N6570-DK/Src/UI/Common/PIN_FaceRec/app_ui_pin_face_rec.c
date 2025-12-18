@@ -22,6 +22,7 @@
 #include "app_ui_pin_face_rec_controller.h"
 #include "app_ui_pin_face_rec.h"
 
+#define FR_MAX_WRONG_PINS 3
 
 #define FR_KEY_W   100
 #define FR_KEY_H   65
@@ -113,6 +114,10 @@ void FR_UI_DrawPinBuffer(int pin_len)
 
 void UI_FR_PinScreen_Show(void)
 {
+    fr_wrong_pin_count = 0;   // RESET attempts
+    fr_pin_len = 0;
+    memset(fr_pin_buffer, 0, sizeof(fr_pin_buffer));
+
     APP_SleepMode_Disable();
 
     UTIL_LCD_SetLayer(1);
