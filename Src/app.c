@@ -58,7 +58,9 @@
 #include "face_recognition.h"
 #include "app_touch.h"
 #include "app_sleepmode.h"
+#include "profiler.h"
 
+volatile det_profile_t g_det_prof = {0};
 
 static StaticTask_t cpu_task_tcb;
 static StackType_t  cpu_task_stack[512];
@@ -425,6 +427,18 @@ static void reload_bg_layer(int next_disp_idx)
 
 static void app_main_pipe_frame_event()
 {
+
+  static uint32_t fps_cnt = 0;
+  static uint32_t fps_t0  = 0;
+
+  uint32_t now = HAL_GetTick();
+  if (fps_t0 == 0) fps_t0 = now;
+  fps_cnt++;
+  if ((now - fps_t0) >= 1000) {
+	  printf("[FPS][APP] %lu\n", fps_cnt);
+	  fps_cnt = 0;
+	  fps_t0  = now;
+  }
   //printf("P1 frame\n");
   int next_disp_idx = (lcd_bg_buffer_disp_idx + 1) % DISPLAY_BUFFER_NB;
   int next_capt_idx = (lcd_bg_buffer_capt_idx + 1) % DISPLAY_BUFFER_NB;
@@ -1137,7 +1151,7 @@ static void xspi_quick_check(void)
 void app_init_pipeline(void)
 {
   printf("Init application (base only)\r\n");
-
+  PROF_Init();
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
 
   memset(lcd_bg_buffer, 0, sizeof(lcd_bg_buffer));

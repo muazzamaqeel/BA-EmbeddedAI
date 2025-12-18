@@ -12,7 +12,7 @@ from Crypto.Util.Padding import pad
 import hashlib
 from Crypto.Cipher import AES
 
-UID_HEX = "0030315642365003000A0017"   # your board UID
+UID_HEX = "003031564236500300320026"   # your board UID
 UID_BYTES = bytes.fromhex(UID_HEX)
 
 # Derive MASTER KEY + IV = SHA256(UID)

@@ -139,3 +139,22 @@ extern display_t disp;
 const LL_Buffer_InfoTypeDef *Detector_In_Info(void);
 const LL_Buffer_InfoTypeDef *Detector_Out_Info(void);
 void Detector_Run(void);
+
+
+typedef struct
+{
+    /* preprocessing */
+    uint32_t det_pre_cycles;
+
+    /* inference (Detector_Run) */
+    uint32_t det_infer_cycles;
+
+    /* total = pre + infer */
+    uint32_t det_total_cycles;
+
+    /* statistics */
+    uint32_t det_count;
+    uint32_t det_infer_cycles_avg;
+} det_profile_t;
+
+extern volatile det_profile_t g_det_prof;
