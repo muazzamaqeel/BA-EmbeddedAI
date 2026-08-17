@@ -2,6 +2,10 @@
 ## Description
 This repository contains the customized version of the Embedded AI face recognition system developed for my bachelor thesis. The software runs fully on the STM32N6570 Discovery Kit and provides local face detection, face recognition, PIN verification and a small user interface. All components run offline on the microcontroller with low power usage.
 
+## Thesis doc:
+  - [Thesis.pdf](https://github.com/user-attachments/files/31149831/Thesis.pdf)
+
+
 ## Graphical User Interface
 <p align="left">
   <img src="https://github.com/user-attachments/assets/a2b326f1-37af-4aa7-ac6c-edb7c6938e9d" height="300px" />
@@ -38,10 +42,6 @@ cd /c/STM32_FaceRecognition/BA-EmbeddedAI/Scripts
 <p align="left">
 <img width="1189" height="668" alt="PackageDiagram" src="https://github.com/user-attachments/assets/39684016-8e20-4522-b9ca-c43cd7b38eeb" />
 </p>
-
-
-
-
 
 
 
